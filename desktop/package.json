@@ -1,0 +1,50 @@
+{
+  "name": "tunnelx-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TunnelX desktop frontend",
+  "main": "dist-electron/main/index.js",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:renderer": "vite",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.renderer.json && tsc --noEmit -p tsconfig.electron.json",
+    "build:renderer": "vite build",
+    "build:electron": "tsc -p tsconfig.electron.json",
+    "verify:preload": "node scripts/verify-preload.mjs",
+    "build": "npm run typecheck && npm run build:renderer && npm run build:electron && npm run verify:preload",
+    "package": "npm run build && electron-builder"
+  },
+  "dependencies": {
+    "vue": "^3.5.21"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.1",
+    "@vitejs/plugin-vue": "^6.0.1",
+    "electron": "^38.0.0",
+    "electron-builder": "^26.0.12",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.4",
+    "vue-tsc": "^3.0.6"
+  },
+  "build": {
+    "appId": "com.tunnelx.desktop",
+    "productName": "TunnelX",
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../tunnelx-cli.exe",
+        "to": "core/tunnelx-cli.exe"
+      }
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": "nsis"
+    }
+  }
+}

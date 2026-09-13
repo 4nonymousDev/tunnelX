@@ -1,0 +1,42 @@
+:root {
+  font-family: Inter, "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  color: #e9edf6;
+  background: #0b1020;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  --text: #e9edf6;
+  --muted: #8792a9;
+  --accent: #5b7cfa;
+  --accent-light: #8ca2ff;
+  --success: #38cb89;
+  --warning: #f8b84f;
+  --danger: #ff6875;
+  --surface: rgba(19, 27, 46, .82);
+  --line: rgba(147, 163, 195, .12);
+  --line-strong: rgba(147, 163, 195, .2);
+}
+
+* { box-sizing: border-box; }
+html, body, #app { min-height: 100%; margin: 0; }
+body {
+  min-width: 900px;
+  min-height: 620px;
+  background:
+    radial-gradient(circle at 10% -10%, rgba(91,124,250,.16), transparent 30%),
+    radial-gradient(circle at 90% 110%, rgba(92,66,190,.11), transparent 34%),
+    #0b1020;
+}
+button, input { font-family: inherit; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-light); outline-offset: 2px; }
+.button { min-height: 34px; padding: 0 14px; border: 1px solid transparent; border-radius: 9px; color: var(--text); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; transition: filter .15s, background .15s, border-color .15s; }
+.button:hover:not(:disabled) { filter: brightness(1.1); }
+.button:disabled { opacity: .45; cursor: not-allowed; }
+.button-primary { color: white; background: var(--accent); box-shadow: 0 5px 18px rgba(91,124,250,.22); }
+.button-secondary { border-color: var(--line-strong); background: rgba(255,255,255,.035); }
+.button-danger { border-color: rgba(255,104,117,.25); color: #ffb0b8; background: rgba(255,104,117,.08); }
+.input { width: 100%; height: 38px; padding: 0 11px; border: 1px solid var(--line-strong); border-radius: 9px; color: var(--text); background: #0b1120; transition: border-color .15s, box-shadow .15s; }
+.input::placeholder { color: #505b70; }
+.input:focus { border-color: var(--accent); outline: 0; box-shadow: 0 0 0 3px rgba(91,124,250,.12); }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { border: 3px solid transparent; border-radius: 999px; background: #303a50; background-clip: padding-box; }
+::-webkit-scrollbar-track { background: transparent; }

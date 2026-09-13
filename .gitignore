@@ -1,0 +1,75 @@
+# ---- 密钥与凭据（绝不可提交）----
+# ---- Keys and credentials (never commit) ----
+tunnel_key
+tunnel_key.pub
+host_key
+host_key.pub
+known_hosts
+authorized_keys
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+config.json
+
+# ---- 运行时生成的配置与日志 ----
+# ---- Runtime configuration and logs ----
+# 注意 config.json 前的 /：只忽略仓库根目录下的那份，
+# 不影响将来可能出现的 testdata/config.json 之类。
+# The leading slash ignores only the repository-root config.json, not a future
+# file such as testdata/config.json.
+/config.json
+tunnelx.log
+tunnelx.log.*
+startup.log
+audit.jsonl
+.tunnelx-control.json
+.tunnelx-ui.json
+.codex-tmp/
+
+# ---- 构建产物 ----
+# ---- Build artifacts ----
+# 全部以 / 开头限定在仓库根：否则 "tunnel-server" 会连同
+# cmd/tunnel-server/ 这个源码目录一起被忽略。
+# Leading slashes scope these names to the repository root; otherwise the
+# tunnel-server pattern would also hide the cmd/tunnel-server source directory.
+/tunnelx
+/tunnelx.exe
+/tunnelx-cli
+/tunnelx-cli.exe
+/tunnelx-cli-linux-*
+/tunnel-server
+/tunnel-server.exe
+/tunnel-server-linux-*
+*.dll
+*.so
+*.dylib
+/dist/
+/build/
+
+# ---- 本地资料（不公开）----
+# ---- Local material (not published) ----
+/docs/
+
+# ---- Go ----
+# ---- Go ----
+*.test
+*.out
+vendor/
+
+# ---- 调试产物 ----
+# ---- Debug artifacts ----
+# Delve（dlv debug / VSCode 调试）在被调试包目录下生成的临时二进制。
+# Temporary binaries created by Delve (dlv debug / VS Code) in package directories.
+__debug_bin*
+*.exe~
+
+# ---- 编辑器 / 系统 ----
+# ---- Editors / operating system ----
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+desktop.ini

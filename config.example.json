@@ -1,0 +1,74 @@
+{
+  "_说明_": "复制为 config.json 后按需修改。也可直接在程序界面里配置，无需手工编辑本文件。以 _说明_ 开头的字段会被程序忽略，可安全删除。",
+
+  "_说明_id_": "留空则首次启动自动生成并写回，此后永不改变。其他机器要接入本机导出的端口时，peer_id 填的就是这个值。切勿在多台机器间复制同一个 id——服务端会以 duplicate_id 拒绝后连的那台。",
+  "id": "",
+
+  "_说明_name_": "本机显示名，留空则自动取计算机名。仅用于界面显示与日志，可随时修改，不影响已建立的接入关系。",
+  "name": "",
+
+  "_说明_server_addr_": "tunnel-server 的地址。端口是它的监听端口（默认 2222），不是系统 sshd 的 22。",
+  "server_addr": "tunnel.example.com:2222",
+
+  "_说明_server_user_": "服务端只校验公钥，不校验用户名。填个可辨认的即可，服务端日志会记录它。",
+  "server_user": "tunnelx",
+
+  "_说明_key_path_": "隧道专用私钥。相对路径以程序所在目录为基准。切勿复用能登录服务器的密钥——那等于把服务器权限分发给每台客户端。",
+  "key_path": "tunnel_key",
+
+  "_说明_tunnels_": "两种类型：export 把本机端口推到服务端，供他人接入；import 把其他机器推上来的端口拉到本机访问。同一台机器可以同时有两种。",
+  "tunnels": [
+    {
+      "_说明_": "【导出】把本机 nginx 分享出去。服务端端口由服务器自动分配，无需也无法指定。",
+      "_说明_id_": "留空即可，客户端首次加载时生成。UI 和 CLI 用它稳定识别该规则。",
+      "id": "",
+      "kind": "export",
+      "name": "nginx",
+      "enabled": true,
+      "local_host": "127.0.0.1",
+      "local_port": 80
+    },
+    {
+      "_说明_": "【导出】local_host 不限于本机——可填内网其他设备，把 NAS、打印机、路由器管理页一并导出。",
+      "kind": "export",
+      "name": "NAS 管理页",
+      "enabled": true,
+      "local_host": "192.168.1.50",
+      "local_port": 5000
+    },
+    {
+      "_说明_": "【导出】enabled 为 false 表示暂时停用：配置保留，但不建立隧道。",
+      "kind": "export",
+      "name": "开发服务器",
+      "enabled": false,
+      "local_host": "127.0.0.1",
+      "local_port": 8080
+    },
+    {
+      "_说明_": "【导入】接入其他机器导出的端口。建议用界面的「从在线列表添加」，会自动填好以下字段，无需手抄。",
+      "_说明_peer_id_": "对端 config.json 里的 id 值。填错与对端离线的症状相同（都是「对端不在线」），日志会列出注册表中实际可选的 peer_id 供对照。",
+      "_说明_peer_tunnel_id_": "对端导出隧道的 id。与 peer_id 一起精确匹配，因此同一对端可导出不同地址上的相同端口。建议从在线列表添加，让程序自动填写。",
+      "_说明_peer_src_port_": "对端的 local_port，不是服务端分配的端口。用于显示、默认本地端口，以及兼容没有 peer_tunnel_id 的旧配置。",
+      "_说明_listen_port_": "本机监听端口，配好后访问 http://localhost:<listen_port> 即可。可与 peer_src_port 不同（本机该端口可能已被占用）。注意 Windows 上绑定 1024 以下端口需管理员权限。",
+      "kind": "import",
+      "name": "接入办公室 nginx",
+      "enabled": true,
+      "peer_id": "填对端的-id-值-32位十六进制",
+      "peer_tunnel_id": "填对端导出隧道的-id-值",
+      "peer_name": "办公室PC",
+      "peer_src_port": 80,
+      "listen_port": 8080
+    },
+    {
+      "_说明_": "【导入】peer_name 仅供界面显示，对端改名不影响接入——匹配走的是 peer_id。",
+      "kind": "import",
+      "name": "接入家里 NAS",
+      "enabled": false,
+      "peer_id": "填另一台机器的-id-值",
+      "peer_tunnel_id": "填对端导出隧道的-id-值",
+      "peer_name": "家里NAS",
+      "peer_src_port": 5000,
+      "listen_port": 15000
+    }
+  ]
+}
