@@ -195,6 +195,21 @@ SSH 用户名是客户端内部协议值，不再需要配置，也不对应服�
 `tunnelx-cli` 是无 CGO 的通用 Linux 客户端，不依赖 Debian 或 systemd。
 同一架构的静态 ELF 可用于 Debian、Ubuntu、RHEL、Fedora、Arch、Alpine 等主流发行版。
 
+### 生成客户端密钥
+
+CLI 可以直接生成隧道专用密钥，不依赖系统 `ssh-keygen`：
+
+```bash
+./tunnelx-cli keygen \
+  --username alice \
+  --email alice@example.com \
+  --output tunnel_key
+```
+
+`--output` 默认为当前目录的 `tunnel_key`。命令不会覆盖已有的私钥或 `.pub`；
+用户名、邮箱和自动读取的计算机名会以明文 JSON 写入 `.pub` 注释，之后可在
+服务端管理页面直接导入。
+
 ### 便携运行
 
 把 `tunnelx-cli`、`config.json` 和 `tunnel_key` 放在同一目录：
@@ -205,6 +220,19 @@ chmod +x tunnelx-cli
 ```
 
 `run` 在前台运行核心，`Ctrl-C` 停止。首次连接会显示服务器主机指纹，核对后输入确认。
+
+首次确认完成后，如果不创建 systemd 服务，也可以用 `nohup` 转入后台运行，
+并在终端关闭后继续保持隧道：
+
+```bash
+nohup ./tunnelx-cli run > /dev/null 2>&1 < /dev/null &
+echo $! > tunnelx-cli.pid
+```
+
+标准输出和错误输出被丢弃，但 TunnelX 仍会把内部日志写入配置目录的
+`tunnelx.log`。可用 `tail -f tunnelx.log` 查看日志；停止进程时执行
+`kill "$(cat tunnelx-cli.pid)"`。这种方式不会在系统重启后自动启动，也不会在
+进程崩溃后自动重启，需要这些能力时应使用 systemd。
 
 ### 系统服务运行
 

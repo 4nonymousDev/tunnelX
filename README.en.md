@@ -176,6 +176,19 @@ When one Exporter publishes multiple services with the same port, tunnel-server 
 
 `tunnelx-cli` is a CGO-free portable Linux client that does not depend on Debian or systemd. A static ELF for an architecture works across Debian, Ubuntu, RHEL, Fedora, Arch, Alpine, and other mainstream distributions.
 
+### Generate a client key
+
+The CLI generates a tunnel-specific key without depending on the system `ssh-keygen`:
+
+```bash
+./tunnelx-cli keygen \
+  --username alice \
+  --email alice@example.com \
+  --output tunnel_key
+```
+
+`--output` defaults to `tunnel_key` in the current directory. The command never overwrites an existing private key or `.pub` file. It stores the username, email, and automatically detected computer name as plaintext JSON in the `.pub` comment, ready for import through the server management page.
+
 ### Portable execution
 
 Put `tunnelx-cli`, `config.json`, and `tunnel_key` in one directory:
@@ -186,6 +199,20 @@ chmod +x tunnelx-cli
 ```
 
 `run` keeps the core in the foreground; press Ctrl-C to stop. The first connection displays the host fingerprint and asks for confirmation.
+
+After completing the first host-key confirmation, you can keep the client running after
+the terminal closes without creating a systemd service by using `nohup`:
+
+```bash
+nohup ./tunnelx-cli run > /dev/null 2>&1 < /dev/null &
+echo $! > tunnelx-cli.pid
+```
+
+Standard output and standard error are discarded, while TunnelX continues writing its
+internal log to `tunnelx.log` in the configuration directory. Use
+`tail -f tunnelx.log` to follow it and `kill "$(cat tunnelx-cli.pid)"` to stop the process.
+This method does not start automatically after a reboot or restart the process after a
+crash; use systemd when those capabilities are required.
 
 ### System service execution
 

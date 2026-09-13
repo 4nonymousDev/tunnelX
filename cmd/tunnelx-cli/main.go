@@ -6,6 +6,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 
 	"tunnelx/internal/config"
 	"tunnelx/internal/core"
+	"tunnelx/internal/keygen"
 	"tunnelx/internal/localapi"
 	"tunnelx/internal/logbuf"
 )
@@ -37,6 +39,8 @@ func run(args []string) error {
 		case "version":
 			fmt.Println(Version)
 			return nil
+		case "keygen":
+			return runKeygen(args[1:], os.Stdout)
 		}
 	}
 	command := "run"
@@ -99,11 +103,73 @@ func usage() {
 
 Usage:
   tunnelx-cli run [--config path] [--accept-host-key SHA256:...] [--confirm-via-api]
+  tunnelx-cli keygen --username NAME --email EMAIL [--output path]
   tunnelx-cli status [--config path]
   tunnelx-cli connect|disconnect [--config path]
   tunnelx-cli logs [--follow] [--config path]
   tunnelx-cli tunnels [--config path]
   tunnelx-cli confirm --id N (--accept|--reject) [--config path]`)
+}
+
+func runKeygen(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("keygen", flag.ContinueOnError)
+	fs.SetOutput(out)
+	username := fs.String("username", "", "username stored in plaintext .pub metadata")
+	email := fs.String("email", "", "email stored in plaintext .pub metadata")
+	output := fs.String("output", config.DefaultKeyName, "private-key output path")
+	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return nil
+		}
+		return err
+	}
+	if len(fs.Args()) != 0 {
+		return fmt.Errorf("未知参数: %s", strings.Join(fs.Args(), " "))
+	}
+	if strings.TrimSpace(*username) == "" {
+		return fmt.Errorf("keygen需要 --username")
+	}
+	if strings.TrimSpace(*email) == "" {
+		return fmt.Errorf("keygen需要 --email")
+	}
+	rawOutput := strings.TrimSpace(*output)
+	if rawOutput == "" {
+		return fmt.Errorf("keygen的 --output 不能为空")
+	}
+	if rawOutput == "." || strings.HasSuffix(rawOutput, "/") || strings.HasSuffix(rawOutput, `\`) {
+		return fmt.Errorf("keygen的 --output 必须包含私钥文件名")
+	}
+
+	keyPath, err := filepath.Abs(filepath.Clean(rawOutput))
+	if err != nil {
+		return fmt.Errorf("解析输出路径: %w", err)
+	}
+	parent := filepath.Dir(keyPath)
+	info, err := os.Stat(parent)
+	if err != nil {
+		return fmt.Errorf("输出目录不可用 %s: %w", parent, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("输出目录不是目录: %s", parent)
+	}
+	metadata, err := keygen.NewMetadata(*username, *email)
+	if err != nil {
+		return err
+	}
+	result, err := keygen.GenerateWithMetadata(parent, filepath.Base(keyPath), metadata)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(out, "Private key: %s\n", result.KeyPath)
+	fmt.Fprintf(out, "Public key: %s\n", result.PubPath)
+	fmt.Fprintf(out, "Fingerprint: %s\n", result.Fingerprint)
+	fmt.Fprintln(out, "Authorized key line:")
+	fmt.Fprint(out, result.PublicKey)
+	if result.PermErr != nil {
+		fmt.Fprintf(out, "Warning: could not tighten private-key permissions: %v\n", result.PermErr)
+	}
+	return nil
 }
 
 func runDaemon(cfg *config.Config, endpoint, fingerprint string, confirmViaAPI bool) error {
