@@ -383,14 +383,6 @@ func (m *Manager) connectAndServe(ctx context.Context) error {
 	if addr == "" {
 		return tunnel.NotConfigured("尚未配置服务器地址，请点「设置」填写")
 	}
-	// 空用户名不会被 SSH 层拦下——它会完成整个握手，直到服务器拒绝，
-	// 而客户端只能把那次拒绝报成"认证被拒绝：私钥未被授权"，
-	// 与真正的原因南辕北辙。故在此提前拦截。
-	// The SSH layer does not reject an empty username until after a full handshake,
-	// producing a misleading unauthorized-key error. Reject it here with the real cause.
-	if m.cfg.ServerUser == "" {
-		return tunnel.NotConfigured("尚未配置用户名，请点「设置」填写")
-	}
 	// 未指定端口时补默认 22——用户通常只填主机名。
 	// Default to port 22 when omitted, since users commonly enter only a hostname.
 	if _, _, err := net.SplitHostPort(addr); err != nil {
@@ -407,7 +399,7 @@ func (m *Manager) connectAndServe(ctx context.Context) error {
 
 	conn, err := sshconn.Dialer{
 		Addr:       addr,
-		User:       m.cfg.ServerUser,
+		User:       config.SSHUser,
 		KeyPath:    keyPath,
 		KnownHosts: knownHosts,
 		Prompt:     m.hostKeyPrompt,

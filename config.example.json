@@ -10,8 +10,6 @@
   "_说明_server_addr_": "tunnel-server 的地址。端口是它的监听端口（默认 2222），不是系统 sshd 的 22。",
   "server_addr": "tunnel.example.com:2222",
 
-  "_说明_server_user_": "服务端只校验公钥，不校验用户名。填个可辨认的即可，服务端日志会记录它。",
-  "server_user": "tunnelx",
 
   "_说明_key_path_": "隧道专用私钥。相对路径以程序所在目录为基准。切勿复用能登录服务器的密钥——那等于把服务器权限分发给每台客户端。",
   "key_path": "tunnel_key",

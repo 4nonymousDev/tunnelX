@@ -7,6 +7,8 @@ import type {
   ClientDetailDto,
   ClientDto,
   OverviewDto,
+  ImportPublicKeyRequestDto,
+  ImportPublicKeyResultDto,
   PageDto,
   SessionDto,
 } from '../types/admin'
@@ -103,6 +105,11 @@ export function useAdminApi() {
     await execute(() => request(`/clients/${encodeURIComponent(fingerprint)}`, { method: 'PATCH', body: JSON.stringify({ note, reason }) }))
     await loadClients()
     await loadClientDetail(fingerprint)
+  }
+  async function importPublicKey(payload: ImportPublicKeyRequestDto) {
+    const result = await execute(() => request<ImportPublicKeyResultDto>('/clients/import-key', { method: 'POST', body: JSON.stringify(payload) }))
+    await loadClients()
+    return result
   }
   async function blockClient(fingerprint: string, reason: string, expiresAt: string | null = null) {
     await execute(() => request(`/clients/${encodeURIComponent(fingerprint)}/block`, { method: 'POST', body: JSON.stringify({ reason, expires_at: expiresAt }) }))
@@ -211,7 +218,7 @@ export function useAdminApi() {
     clientDetail: readonly(clientDetail), auditPage: readonly(auditPage), adminActions: readonly(adminActions),
     loading: readonly(loading), error: readonly(error), eventsConnected: readonly(eventsConnected),
     authenticate, clearToken, refreshAll, loadAudit, loadClientDetail, disconnectSession,
-    updateClientNote, blockClient, unblockClient, exportAudit,
+    updateClientNote, importPublicKey, blockClient, unblockClient, exportAudit,
   }
 }
 

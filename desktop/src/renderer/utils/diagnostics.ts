@@ -17,7 +17,6 @@ export function buildDiagnosticReport(
       id: snapshot.id,
       name: snapshot.name,
       server_addr: snapshot.server_addr,
-      server_user: snapshot.server_user,
       key_path: snapshot.key_path,
       connection: snapshot.connection,
     } : null,

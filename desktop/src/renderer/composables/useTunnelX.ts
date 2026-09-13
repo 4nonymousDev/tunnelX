@@ -2,6 +2,8 @@ import { computed, onMounted, onUnmounted, shallowReadonly, shallowRef } from 'v
 
 import type {
   CoreStatus,
+  KeyGenerationRequestDTO,
+  KeyGenerationResultDTO,
   SettingsDTO,
   SnapshotDTO,
   TunnelConfigDTO,
@@ -86,6 +88,12 @@ export function useTunnelX() {
     await invoke(() => bridge().updateSettings(settings))
   }
 
+  async function generateKey(request: KeyGenerationRequestDTO): Promise<KeyGenerationResultDTO | undefined> {
+    let result: KeyGenerationResultDTO | undefined
+    await execute(async () => { result = await bridge().generateKey(request) })
+    return result
+  }
+
   async function copyText(text: string): Promise<void> {
     await execute(() => bridge().copyText(text))
   }
@@ -147,6 +155,7 @@ export function useTunnelX() {
     updateTunnel,
     deleteTunnel,
     updateSettings,
+    generateKey,
     copyText,
     confirm,
     clearError,

@@ -1,6 +1,7 @@
 package core
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -19,6 +20,24 @@ func testService(t *testing.T) *Service {
 	}
 	t.Cleanup(s.Close)
 	return s
+}
+
+func TestGenerateKeyEmbedsRequestedMetadata(t *testing.T) {
+	s := testService(t)
+	result, metadata, err := s.GenerateKey("generated_key", "alice", "alice@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.Username != "alice" || metadata.Email != "alice@example.com" || metadata.ComputerName == "" {
+		t.Fatalf("metadata=%#v", metadata)
+	}
+	data, err := os.ReadFile(result.PubPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != result.PublicKey {
+		t.Fatal("returned public key does not match the .pub file")
+	}
 }
 
 func TestServicePublishesLogAndTunnelEvents(t *testing.T) {

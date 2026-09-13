@@ -83,6 +83,35 @@ func TestGenerateComment(t *testing.T) {
 	}
 }
 
+func TestGenerateWithMetadataRoundTrip(t *testing.T) {
+	metadata := Metadata{Username: "alice", Email: "alice@example.com", ComputerName: "DEV-PC"}
+	res, err := GenerateWithMetadata(t.TempDir(), "tunnel_key", metadata)
+	if err != nil {
+		t.Fatalf("GenerateWithMetadata: %v", err)
+	}
+	_, comment, _, rest, err := ssh.ParseAuthorizedKey([]byte(res.PublicKey))
+	if err != nil || len(bytes.TrimSpace(rest)) != 0 {
+		t.Fatalf("ParseAuthorizedKey: rest=%q err=%v", rest, err)
+	}
+	parsed, err := ParseMetadataComment(comment)
+	if err != nil {
+		t.Fatalf("ParseMetadataComment(%q): %v", comment, err)
+	}
+	if parsed != metadata {
+		t.Fatalf("metadata=%#v want %#v", parsed, metadata)
+	}
+	if strings.Contains(comment, "@DEV-PC") {
+		t.Fatalf("structured metadata was modified as a legacy comment: %q", comment)
+	}
+}
+
+func TestParseMetadataCommentRejectsTrailingData(t *testing.T) {
+	_, err := ParseMetadataComment(`tunnelx:{"username":"alice","email":"alice@example.com","computer_name":"DEV-PC"} trailing`)
+	if err == nil {
+		t.Fatal("expected trailing data to be rejected")
+	}
+}
+
 // TestGenerateEmptyName 验证名称为空时仍生成合法公钥。
 // 名称来自配置，理论上非空，但配置可被手工编辑成空值。
 // TestGenerateEmptyName verifies that an empty, manually edited name still produces a valid key.

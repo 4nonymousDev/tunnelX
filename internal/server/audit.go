@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -9,10 +10,13 @@ import (
 	"net"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
+	"golang.org/x/crypto/ssh"
 	"tunnelx/internal/adminapi"
+	"tunnelx/internal/keygen"
 	"tunnelx/internal/policy"
 	"tunnelx/internal/session"
 	"tunnelx/internal/store"
@@ -124,7 +128,7 @@ func (b *adminBackend) DisconnectSession(ctx context.Context, id, reason string)
 	return nil
 }
 func clientDTO(s *Server, c store.Client) adminapi.Client {
-	x := adminapi.Client{Fingerprint: c.Fingerprint, Note: c.Note, FirstSeenAt: c.FirstSeenAt, LastSeenAt: c.LastSeenAt, LastIP: c.LastIP, LastClientID: c.LastClientID, LastReportedName: c.LastReportedName, LastRole: c.LastRole, LastVersion: c.LastVersion, Authorized: s.auth.AuthorizedFingerprint(c.Fingerprint), Blocked: s.policy.Blocked(c.Fingerprint)}
+	x := adminapi.Client{Fingerprint: c.Fingerprint, Note: c.Note, Username: c.Username, Email: c.Email, ComputerName: c.ComputerName, FirstSeenAt: c.FirstSeenAt, LastSeenAt: c.LastSeenAt, LastIP: c.LastIP, LastClientID: c.LastClientID, LastReportedName: c.LastReportedName, LastRole: c.LastRole, LastVersion: c.LastVersion, Authorized: s.auth.AuthorizedFingerprint(c.Fingerprint), Blocked: s.policy.Blocked(c.Fingerprint)}
 	for _, v := range s.sessions.Snapshot() {
 		if v.Fingerprint == c.Fingerprint {
 			x.ActiveSessionCount++
@@ -133,6 +137,50 @@ func clientDTO(s *Server, c store.Client) adminapi.Client {
 	x.Online = x.ActiveSessionCount > 0
 	x.EffectiveAccess = x.Authorized && !x.Blocked
 	return x
+}
+
+func (b *adminBackend) ImportPublicKey(ctx context.Context, r adminapi.ImportPublicKeyRequest) (adminapi.ImportPublicKeyResult, error) {
+	s := (*Server)(b)
+	key, comment, _, rest, err := ssh.ParseAuthorizedKey([]byte(strings.TrimSpace(r.PublicKey)))
+	if err != nil || len(bytes.TrimSpace(rest)) != 0 {
+		if err == nil {
+			err = errors.New("multiple public keys are not allowed")
+		}
+		return adminapi.ImportPublicKeyResult{}, &adminapi.BackendError{Code: "invalid_public_key", Message: err.Error()}
+	}
+	// Parse embedded metadata when present so malformed TunnelX comments are not silently accepted.
+	if strings.HasPrefix(strings.TrimSpace(comment), "tunnelx:") {
+		if _, err = keygen.ParseMetadataComment(comment); err != nil {
+			return adminapi.ImportPublicKeyResult{}, &adminapi.BackendError{Code: "invalid_key_metadata", Message: err.Error()}
+		}
+	}
+	metadata := keygen.Metadata{Username: strings.TrimSpace(r.Username), Email: strings.TrimSpace(r.Email), ComputerName: strings.TrimSpace(r.ComputerName)}
+	canonicalComment, err := metadata.Comment()
+	if err != nil {
+		return adminapi.ImportPublicKeyResult{}, &adminapi.BackendError{Code: "invalid_key_metadata", Message: err.Error()}
+	}
+	fp := ssh.FingerprintSHA256(key)
+	if err = s.store.ImportClient(ctx, fp, metadata.Username, metadata.Email, metadata.ComputerName, time.Now()); err == nil {
+		_, err = s.auth.Import(r.PublicKey, canonicalComment)
+	}
+	result, errText := "success", ""
+	if err != nil {
+		result, errText = "failed", err.Error()
+	}
+	if auditErr := s.store.RecordAdminAction(ctx, s.action(fp, "import_public_key", r.Reason, result, errText)); auditErr != nil {
+		return adminapi.ImportPublicKeyResult{}, auditErr
+	}
+	s.notifyAudit(0)
+	if errors.Is(err, errAuthorizedKeyExists) {
+		return adminapi.ImportPublicKeyResult{}, adminapi.ErrConflict
+	}
+	if err != nil {
+		return adminapi.ImportPublicKeyResult{}, err
+	}
+	if s.adminAPI != nil {
+		s.adminAPI.Publish("clients.changed", map[string]string{"fingerprint": fp})
+	}
+	return adminapi.ImportPublicKeyResult{Fingerprint: fp, Username: metadata.Username, Email: metadata.Email, ComputerName: metadata.ComputerName}, nil
 }
 func (b *adminBackend) ListClients(ctx context.Context, q adminapi.ListQuery) (adminapi.Page[adminapi.Client], error) {
 	s := (*Server)(b)

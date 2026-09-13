@@ -118,6 +118,55 @@ func TestUpsertClientEmptyReportedFieldsDoNotEraseHello(t *testing.T) {
 	}
 }
 
+func TestImportClientStoresMetadata(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "x.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	at := time.Unix(20, 123000)
+	if err = s.ImportClient(ctx, "SHA256:import", "alice", "alice@example.com", "DEV-PC", at); err != nil {
+		t.Fatal(err)
+	}
+	c, err := s.GetClient(ctx, "SHA256:import")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Username != "alice" || c.Email != "alice@example.com" || c.ComputerName != "DEV-PC" || c.LastReportedName != "DEV-PC" {
+		t.Fatalf("client=%#v", c)
+	}
+}
+
+func TestSchemaV1MigratesClientMetadata(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "v1.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range schemaV1 {
+		if _, err = db.Exec(query); err != nil {
+			db.Close()
+			t.Fatal(err)
+		}
+	}
+	if _, err = db.Exec("PRAGMA user_version = 1"); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if err = db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err = s.ImportClient(context.Background(), "SHA256:migrated", "bob", "bob@example.com", "BOB-PC", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestStableTimeIDCursorAcrossAuditPages(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "x.db"))
 	if err != nil {

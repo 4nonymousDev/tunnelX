@@ -81,6 +81,16 @@
       :busy="busy"
       @close="settingsOpen = false"
       @save="saveSettings"
+      @generate="openKeyGenerator"
+    />
+    <KeyGenerationDialog
+      :open="keyDialogOpen"
+      :key-path="keyGenerationPath"
+      :busy="busy"
+      :result="keyGenerationResult"
+      @close="closeKeyGenerator"
+      @submit="submitKeyGeneration"
+      @copy="copyText"
     />
     <ConfirmationDialog
       :confirmation="displayedConfirmation"
@@ -96,6 +106,8 @@ import { computed, onUnmounted, shallowRef } from 'vue'
 
 import type {
   ConfirmationDTO,
+  KeyGenerationRequestDTO,
+  KeyGenerationResultDTO,
   SettingsDTO,
   TunnelConfigDTO,
   TunnelDTO,
@@ -107,6 +119,7 @@ import { availableImportEntries, unavailableImportEntries, usedImportPorts } fro
 import ConfirmationDialog from './ConfirmationDialog.vue'
 import ConnectionHeader from './ConnectionHeader.vue'
 import ImportPickerDialog from './ImportPickerDialog.vue'
+import KeyGenerationDialog from './KeyGenerationDialog.vue'
 import LogPanel from './LogPanel.vue'
 import SettingsDialog from './SettingsDialog.vue'
 import TunnelEditorDialog from './TunnelEditorDialog.vue'
@@ -131,6 +144,7 @@ const {
   updateTunnel,
   deleteTunnel,
   updateSettings,
+  generateKey,
   copyText,
   confirm,
   clearError,
@@ -142,6 +156,9 @@ const editorKind = shallowRef<TunnelKind>('export')
 const editTarget = shallowRef<TunnelDTO>()
 const deleteTarget = shallowRef<TunnelDTO>()
 const settingsOpen = shallowRef(false)
+const keyDialogOpen = shallowRef(false)
+const keyGenerationPath = shallowRef('')
+const keyGenerationResult = shallowRef<KeyGenerationResultDTO>()
 const importPickerOpen = shallowRef(false)
 const diagnosticsCopied = shallowRef(false)
 let diagnosticsResetTimer: ReturnType<typeof setTimeout> | undefined
@@ -210,6 +227,21 @@ async function toggleTunnel(tunnel: TunnelDTO): Promise<void> {
 async function saveSettings(value: SettingsDTO): Promise<void> {
   await updateSettings(value)
   if (!error.value) settingsOpen.value = false
+}
+
+function openKeyGenerator(path: string): void {
+  keyGenerationPath.value = path
+  keyGenerationResult.value = undefined
+  keyDialogOpen.value = true
+}
+
+function closeKeyGenerator(): void {
+  keyDialogOpen.value = false
+  keyGenerationResult.value = undefined
+}
+
+async function submitKeyGeneration(request: KeyGenerationRequestDTO): Promise<void> {
+  keyGenerationResult.value = await generateKey(request)
 }
 
 async function copyDiagnostics(): Promise<void> {

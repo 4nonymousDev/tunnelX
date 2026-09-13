@@ -142,6 +142,41 @@ func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request, rid string) {
 		}
 		v, e := s.backend.ListClients(r.Context(), q)
 		s.respond(w, rid, v, e)
+	case escaped == "/api/v1/clients/import-key":
+		if !allow(w, r, rid, http.MethodPost) {
+			return
+		}
+		var b importKeyBody
+		if !decodeJSON(w, r, rid, &b) {
+			return
+		}
+		publicKey, e := validText(b.PublicKey, 1, 16384, "public_key")
+		if e != nil {
+			bad(w, rid, e)
+			return
+		}
+		username, e := validText(b.Username, 1, 128, "username")
+		if e != nil {
+			bad(w, rid, e)
+			return
+		}
+		email, e := validText(b.Email, 3, 254, "email")
+		if e != nil {
+			bad(w, rid, e)
+			return
+		}
+		computerName, e := validText(b.ComputerName, 1, 255, "computer_name")
+		if e != nil {
+			bad(w, rid, e)
+			return
+		}
+		reason, e := validText(b.Reason, 1, 500, "reason")
+		if e != nil {
+			bad(w, rid, e)
+			return
+		}
+		v, e := s.backend.ImportPublicKey(r.Context(), ImportPublicKeyRequest{PublicKey: publicKey, Username: username, Email: email, ComputerName: computerName, Reason: reason})
+		s.respondCreated(w, rid, v, e)
 	case strings.HasPrefix(escaped, "/api/v1/clients/"):
 		s.serveClient(w, r, rid, strings.TrimPrefix(escaped, "/api/v1/clients/"))
 	case escaped == "/api/v1/audit/events":
@@ -304,6 +339,13 @@ type blockBody struct {
 	Reason    string     `json:"reason"`
 	ExpiresAt *time.Time `json:"expires_at"`
 }
+type importKeyBody struct {
+	PublicKey    string `json:"public_key"`
+	Username     string `json:"username"`
+	Email        string `json:"email"`
+	ComputerName string `json:"computer_name"`
+	Reason       string `json:"reason"`
+}
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, rid string, dst any) bool {
 	media, _, e := mime.ParseMediaType(r.Header.Get("Content-Type"))
@@ -419,6 +461,13 @@ func (s *Server) respondEmpty(w http.ResponseWriter, rid string, e error) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+func (s *Server) respondCreated(w http.ResponseWriter, rid string, v any, e error) {
+	if e != nil {
+		writeBackendError(w, rid, e)
+		return
+	}
+	writeJSON(w, http.StatusCreated, v)
 }
 func bad(w http.ResponseWriter, rid string, e error) {
 	writeError(w, http.StatusBadRequest, "invalid_request", e.Error(), rid)

@@ -71,7 +71,6 @@ export interface SnapshotDTO {
   id: string
   name: string
   server_addr: string
-  server_user: string
   key_path: string
   connection: ConnectionDTO
   tunnels: TunnelDTO[]
@@ -92,8 +91,22 @@ export interface CoreEventDTO {
 export interface SettingsDTO {
   name: string
   server_addr: string
-  server_user: string
   key_path: string
+}
+
+export interface KeyGenerationRequestDTO {
+  key_path: string
+  username: string
+  email: string
+}
+
+export interface KeyGenerationResultDTO {
+  key_path: string
+  pub_path: string
+  public_key: string
+  fingerprint: string
+  metadata: { username: string; email: string; computer_name: string }
+  permission_ok: boolean
 }
 
 export interface CoreStatus {

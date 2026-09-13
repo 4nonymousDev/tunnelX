@@ -13,7 +13,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 1
+const schemaVersion = 2
 const microsPerSecond = int64(time.Second / time.Microsecond)
 
 type Store struct{ db *sql.DB }
@@ -63,6 +63,20 @@ func (s *Store) migrate(ctx context.Context) error {
 			return err
 		}
 	}
+	if v < 2 {
+		for _, q := range []string{
+			"ALTER TABLE clients ADD COLUMN username TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE clients ADD COLUMN email TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE clients ADD COLUMN computer_name TEXT NOT NULL DEFAULT ''",
+		} {
+			if _, err = tx.ExecContext(ctx, q); err != nil {
+				return fmt.Errorf("migrate schema v2: %w", err)
+			}
+		}
+		if _, err = tx.ExecContext(ctx, "PRAGMA user_version = 2"); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 
@@ -87,9 +101,18 @@ func nullableTime(t *time.Time) any {
 }
 
 type Client struct {
-	Fingerprint, Note, LastIP, LastClientID, LastReportedName, LastRole, LastVersion string
-	FirstSeenAt, LastSeenAt                                                          time.Time
+	Fingerprint, Note, Username, Email, ComputerName, LastIP, LastClientID, LastReportedName, LastRole, LastVersion string
+	FirstSeenAt, LastSeenAt                                                                                         time.Time
 }
+
+func (s *Store) ImportClient(ctx context.Context, fp, username, email, computerName string, at time.Time) error {
+	if at.IsZero() {
+		at = time.Now()
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO clients(fingerprint,first_seen_at,last_seen_at,username,email,computer_name,last_reported_name) VALUES(?,?,?,?,?,?,?) ON CONFLICT(fingerprint) DO UPDATE SET username=excluded.username,email=excluded.email,computer_name=excluded.computer_name,last_reported_name=CASE WHEN clients.last_reported_name='' THEN excluded.computer_name ELSE clients.last_reported_name END`, fp, dbtime(at), dbtime(at), username, email, computerName, computerName)
+	return err
+}
+
 type Seen struct {
 	Fingerprint, IP, ClientID, ReportedName, Role, Version string
 	At                                                     time.Time
@@ -116,14 +139,14 @@ func (s *Store) UpdateClientNote(ctx context.Context, fp, note string) error {
 func (s *Store) GetClient(ctx context.Context, fp string) (Client, error) {
 	var c Client
 	var f, l int64
-	err := s.db.QueryRowContext(ctx, `SELECT fingerprint,note,first_seen_at,last_seen_at,last_ip,last_client_id,last_reported_name,last_role,last_version FROM clients WHERE fingerprint=?`, fp).Scan(&c.Fingerprint, &c.Note, &f, &l, &c.LastIP, &c.LastClientID, &c.LastReportedName, &c.LastRole, &c.LastVersion)
+	err := s.db.QueryRowContext(ctx, `SELECT fingerprint,note,username,email,computer_name,first_seen_at,last_seen_at,last_ip,last_client_id,last_reported_name,last_role,last_version FROM clients WHERE fingerprint=?`, fp).Scan(&c.Fingerprint, &c.Note, &c.Username, &c.Email, &c.ComputerName, &f, &l, &c.LastIP, &c.LastClientID, &c.LastReportedName, &c.LastRole, &c.LastVersion)
 	c.FirstSeenAt = scantime(f)
 	c.LastSeenAt = scantime(l)
 	return c, err
 }
 func (s *Store) ListClients(ctx context.Context, limit int, afterFingerprint string) ([]Client, error) {
 	limit = normalizeLimit(limit)
-	rows, err := s.db.QueryContext(ctx, `SELECT fingerprint,note,first_seen_at,last_seen_at,last_ip,last_client_id,last_reported_name,last_role,last_version FROM clients WHERE fingerprint>? ORDER BY fingerprint LIMIT ?`, afterFingerprint, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT fingerprint,note,username,email,computer_name,first_seen_at,last_seen_at,last_ip,last_client_id,last_reported_name,last_role,last_version FROM clients WHERE fingerprint>? ORDER BY fingerprint LIMIT ?`, afterFingerprint, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +155,7 @@ func (s *Store) ListClients(ctx context.Context, limit int, afterFingerprint str
 	for rows.Next() {
 		var c Client
 		var f, l int64
-		if err = rows.Scan(&c.Fingerprint, &c.Note, &f, &l, &c.LastIP, &c.LastClientID, &c.LastReportedName, &c.LastRole, &c.LastVersion); err != nil {
+		if err = rows.Scan(&c.Fingerprint, &c.Note, &c.Username, &c.Email, &c.ComputerName, &f, &l, &c.LastIP, &c.LastClientID, &c.LastReportedName, &c.LastRole, &c.LastVersion); err != nil {
 			return nil, err
 		}
 		c.FirstSeenAt = scantime(f)

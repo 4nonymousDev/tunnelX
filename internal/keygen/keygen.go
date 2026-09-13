@@ -17,8 +17,11 @@ package keygen
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
+	"net/mail"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,15 +31,79 @@ import (
 	"tunnelx/internal/keyperm"
 )
 
+const metadataPrefix = "tunnelx:"
+
+// Metadata is embedded as human-readable JSON in the public-key comment.
+// It is descriptive only and never participates in authentication.
+type Metadata struct {
+	Username     string `json:"username"`
+	Email        string `json:"email"`
+	ComputerName string `json:"computer_name"`
+}
+
+func NewMetadata(username, email string) (Metadata, error) {
+	host, err := os.Hostname()
+	if err != nil || strings.TrimSpace(host) == "" {
+		host = "unknown-host"
+	}
+	m := Metadata{Username: strings.TrimSpace(username), Email: strings.TrimSpace(email), ComputerName: strings.TrimSpace(host)}
+	return m, m.Validate()
+}
+
+func (m Metadata) Validate() error {
+	if m.Username == "" || len([]rune(m.Username)) > 128 {
+		return fmt.Errorf("用户名不能为空且不能超过 128 个字符")
+	}
+	if m.Email == "" || len(m.Email) > 254 {
+		return fmt.Errorf("邮箱不能为空且不能超过 254 个字符")
+	}
+	addr, err := mail.ParseAddress(m.Email)
+	if err != nil || addr.Address != m.Email {
+		return fmt.Errorf("邮箱格式无效")
+	}
+	if strings.TrimSpace(m.ComputerName) == "" || len([]rune(m.ComputerName)) > 255 {
+		return fmt.Errorf("计算机名不能为空且不能超过 255 个字符")
+	}
+	return nil
+}
+
+func (m Metadata) Comment() (string, error) {
+	if err := m.Validate(); err != nil {
+		return "", err
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return "", err
+	}
+	return metadataPrefix + string(b), nil
+}
+
+func ParseMetadataComment(comment string) (Metadata, error) {
+	comment = strings.TrimSpace(comment)
+	if !strings.HasPrefix(comment, metadataPrefix) {
+		return Metadata{}, fmt.Errorf("公钥未包含 TunnelX 元数据")
+	}
+	var m Metadata
+	dec := json.NewDecoder(strings.NewReader(strings.TrimPrefix(comment, metadataPrefix)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&m); err != nil {
+		return Metadata{}, fmt.Errorf("解析公钥元数据: %w", err)
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return Metadata{}, fmt.Errorf("解析公钥元数据: 包含多余内容")
+	}
+	if err := m.Validate(); err != nil {
+		return Metadata{}, err
+	}
+	return m, nil
+}
+
 // Result 是一次密钥生成的产物。
 // Result contains the output of one key-generation operation.
 type Result struct {
-	KeyPath string // 私钥绝对路径 / Absolute private-key path.
-	// KeyPath is the absolute private-key path.
-	PubPath string // 公钥绝对路径 / Absolute public-key path.
-	// PubPath is the absolute public-key path.
+	KeyPath   string // 私钥绝对路径 / Absolute private-key path.
+	PubPath   string // 公钥绝对路径 / Absolute public-key path.
 	PublicKey string // authorized_keys 单行文本，供用户复制到服务端 / One authorized_keys line to copy to the server.
-	// PublicKey is the single authorized_keys line to copy to the server.
 
 	// Fingerprint 是 SHA256 指纹，与 ssh-keygen -lf 的输出同格式，
 	// 便于用户在服务端核对贴过去的是不是这一把。
@@ -65,6 +132,20 @@ type Result struct {
 // supported. The key has no passphrase because unattended reconnects rely instead
 // on file access control in internal/keyperm.
 func Generate(dir, name, comment string) (Result, error) {
+	return generate(dir, name, keyComment(comment))
+}
+
+// GenerateWithMetadata writes username, email, and computer name as plaintext
+// structured metadata in the .pub comment.
+func GenerateWithMetadata(dir, name string, metadata Metadata) (Result, error) {
+	comment, err := metadata.Comment()
+	if err != nil {
+		return Result{}, err
+	}
+	return generate(dir, name, comment)
+}
+
+func generate(dir, name, comment string) (Result, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return Result{}, fmt.Errorf("私钥文件名不能为空")
@@ -158,7 +239,7 @@ func Generate(dir, name, comment string) (Result, error) {
 // identify a client's entry when revoking it.
 func authorizedKeyLine(pub ssh.PublicKey, comment string) string {
 	line := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub)))
-	if c := keyComment(comment); c != "" {
+	if c := strings.TrimSpace(comment); c != "" {
 		line += " " + c
 	}
 	return line + "\n"

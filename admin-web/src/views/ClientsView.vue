@@ -1,6 +1,6 @@
 <template>
   <section class="page">
-    <header class="page-header"><div><p class="eyebrow">持久化资产</p><h1 class="page-title">客户端管理</h1></div><span class="count">{{ props.api.clients.value.length }} 个客户端</span></header>
+    <header class="page-header"><div><p class="eyebrow">持久化资产</p><h1 class="page-title">客户端管理</h1></div><div class="header-actions"><span class="count">{{ props.api.clients.value.length }} 个客户端</span><button class="button primary" type="button" @click="importOpen = true">导入 .pub</button></div></header>
     <div class="table-wrap">
       <table class="data-table">
         <thead><tr><th>客户端</th><th>管理员备注</th><th>授权</th><th>黑名单</th><th>在线会话</th><th>最后接入</th><th></th></tr></thead>
@@ -16,17 +16,30 @@
       </table>
       <div v-if="props.api.clients.value.length === 0" class="empty">没有历史客户端记录</div>
     </div>
+    <ImportPublicKeyDialog v-if="importOpen" :busy="props.api.loading.value" @cancel="importOpen = false" @submit="submitImport" />
   </section>
 </template>
 
 <script setup lang="ts">
 import type { AdminApi } from '../composables/useAdminApi'
+import type { ImportPublicKeyRequestDto } from '../types/admin'
 import { formatDate, shortFingerprint } from '../utils/format'
+import ImportPublicKeyDialog from '../components/ImportPublicKeyDialog.vue'
+import { shallowRef } from 'vue'
 
 const props = defineProps<{ api: AdminApi }>()
 const emit = defineEmits<{ select: [fingerprint: string] }>()
+const importOpen = shallowRef(false)
+
+async function submitImport(payload: ImportPublicKeyRequestDto): Promise<void> {
+  try {
+    await props.api.importPublicKey(payload)
+    importOpen.value = false
+  } catch { /* composable exposes the error banner */ }
+}
 </script>
 
 <style scoped>
 .count { color: var(--muted); }
+.header-actions { display: flex; align-items: center; gap: 1rem; }
 </style>

@@ -66,6 +66,40 @@ func TestAdminTokenStrictValidation(t *testing.T) {
 	}
 }
 
+func TestImportPublicKeyPersistsAuthorizationAndMetadata(t *testing.T) {
+	cfg := managementConfig(t)
+	s, err := New(cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	publicKey := genKey(t, filepath.Join(filepath.Dir(cfg.AuthorizedKeys), "imported_key"))
+	result, err := (*adminBackend)(s).ImportPublicKey(context.Background(), adminapi.ImportPublicKeyRequest{
+		PublicKey:    strings.TrimSpace(string(publicKey)),
+		Username:     "alice",
+		Email:        "alice@example.com",
+		ComputerName: "DEV-PC",
+		Reason:       "onboarding",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.auth.AuthorizedFingerprint(result.Fingerprint) {
+		t.Fatal("imported key is not authorized")
+	}
+	client, err := s.store.GetClient(context.Background(), result.Fingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.Username != "alice" || client.Email != "alice@example.com" || client.ComputerName != "DEV-PC" {
+		t.Fatalf("client=%#v", client)
+	}
+	actions, err := s.store.ListAdminActions(context.Background(), 0, 10)
+	if err != nil || len(actions) != 1 || actions[0].Action != "import_public_key" || actions[0].Result != "success" {
+		t.Fatalf("actions=%#v err=%v", actions, err)
+	}
+}
+
 func TestManagementAPIAndShutdown(t *testing.T) {
 	cfg := managementConfig(t)
 	tunnelProbe, _ := net.Listen("tcp", "127.0.0.1:0")

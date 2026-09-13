@@ -78,9 +78,7 @@ function connectionLine(snapshot: SnapshotDTO | undefined, coreStatus: CoreStatu
   if (coreStatus.phase === 'error') return reasonSuffix('TunnelX — 核心异常', coreStatus.message)
   if (!snapshot) return 'TunnelX — 未连接'
 
-  const server = snapshot.server_user
-    ? `${snapshot.server_user}@${snapshot.server_addr}`
-    : snapshot.server_addr
+  const server = snapshot.server_addr
   switch (snapshot.connection.state) {
     case 'connecting':
       return `TunnelX — 正在连接 ${server}`

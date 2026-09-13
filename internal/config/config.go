@@ -23,6 +23,9 @@ const (
 	// DefaultKeyName is the private-key file name for new configurations. It matches the
 	// examples and documentation so copying the executable directory remains portable.
 	DefaultKeyName = "tunnel_key"
+	// SSHUser is an internal protocol value. The TunnelX server authenticates
+	// public keys and does not expose an operating-system SSH account.
+	SSHUser = "tunnelx"
 )
 
 // TunnelKind 区分两种隧道方向。
@@ -94,8 +97,7 @@ type Config struct {
 	// One instance connects to exactly one server.
 	ServerAddr string `json:"server_addr"` // host:port，如 example.com:22 / host:port, for example example.com:22.
 	// host:port, for example example.com:22.
-	ServerUser string `json:"server_user"`
-	KeyPath    string `json:"key_path"` // 私钥路径，相对路径以 exe 目录为基准；新建配置默认 DefaultKeyName / Private-key path; relative paths use the executable directory.
+	KeyPath string `json:"key_path"` // 私钥路径，相对路径以 exe 目录为基准；新建配置默认 DefaultKeyName / Private-key path; relative paths use the executable directory.
 	// Private-key path; relative paths use the executable directory and new configs default to DefaultKeyName.
 
 	Tunnels []Tunnel `json:"tunnels"`
@@ -215,9 +217,9 @@ func loadFrom(path string) (*Config, error) {
 // 注意：只补 ID 与 Name。key_path 不在此列——用户可能有意清空它，
 // 替他填回去属于擅自做主，且会把"未配置私钥"这个明确的错误
 // 变成"文件不存在"这个更难懂的错误。补默认值只发生在全新配置上（见 newDefault）。
-// applyDefaults fills required values omitted by legacy or manual configurations. It
-// intentionally fills only ID and Name; an empty key_path may be deliberate, and replacing
-// it would turn a clear "not configured" error into a confusing "file not found" error.
+// applyDefaults fills required values omitted by legacy or manual configurations.
+// The former server_user JSON property is ignored as an unknown legacy field. An empty
+// key_path may be deliberate, so it remains untouched.
 func applyDefaults(c *Config) {
 	if c.ID == "" {
 		c.ID = newID()

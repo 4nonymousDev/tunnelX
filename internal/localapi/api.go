@@ -20,6 +20,7 @@ import (
 
 	"tunnelx/internal/config"
 	"tunnelx/internal/core"
+	"tunnelx/internal/keygen"
 	"tunnelx/internal/logbuf"
 	"tunnelx/internal/manager"
 	"tunnelx/internal/proto"
@@ -87,7 +88,6 @@ type SnapshotDTO struct {
 	ID         string            `json:"id"`
 	Name       string            `json:"name"`
 	ServerAddr string            `json:"server_addr"`
-	ServerUser string            `json:"server_user"`
 	KeyPath    string            `json:"key_path"`
 	Connection ConnectionDTO     `json:"connection"`
 	Tunnels    []TunnelDTO       `json:"tunnels"`
@@ -169,6 +169,7 @@ func Start(service *core.Service, endpointPath string) (*Server, error) {
 	mux.HandleFunc("PUT /v1/tunnels/{id}", s.auth(s.updateTunnel))
 	mux.HandleFunc("DELETE /v1/tunnels/{id}", s.auth(s.removeTunnel))
 	mux.HandleFunc("PUT /v1/settings", s.auth(s.updateSettings))
+	mux.HandleFunc("POST /v1/keys/generate", s.auth(s.generateKey))
 	mux.HandleFunc("POST /v1/confirm/{id}", s.auth(s.confirm))
 	s.httpServer = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	if err := writeEndpoint(endpointFile, s.endpoint); err != nil {
@@ -263,7 +264,7 @@ func (s *Server) snapshot(w http.ResponseWriter, _ *http.Request) {
 func makeSnapshot(s core.Snapshot) SnapshotDTO {
 	state := connectionStateName(s.Connection.State)
 	out := SnapshotDTO{Version: APIVersion, ID: s.Config.ID, Name: s.Config.Name,
-		ServerAddr: s.Config.ServerAddr, ServerUser: s.Config.ServerUser, KeyPath: s.Config.KeyPath,
+		ServerAddr: s.Config.ServerAddr, KeyPath: s.Config.KeyPath,
 		Connection: ConnectionDTO{State: state, Reason: s.Connection.Reason, RetryAt: s.Connection.RetryAt},
 		Tunnels:    make([]TunnelDTO, 0, len(s.Tunnels)),
 		Registry:   make([]RegistryDTO, 0, len(s.Registry)),
@@ -468,7 +469,6 @@ func (s *Server) removeTunnel(w http.ResponseWriter, r *http.Request) {
 type settingsRequest struct {
 	Name       string `json:"name"`
 	ServerAddr string `json:"server_addr"`
-	ServerUser string `json:"server_user"`
 	KeyPath    string `json:"key_path"`
 }
 
@@ -477,11 +477,39 @@ func (s *Server) updateSettings(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &v) {
 		return
 	}
-	if err := s.service.UpdateSettings(v.Name, v.ServerAddr, v.ServerUser, v.KeyPath); err != nil {
+	if err := s.service.UpdateSettings(v.Name, v.ServerAddr, v.KeyPath); err != nil {
 		writeError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+type generateKeyRequest struct {
+	KeyPath  string `json:"key_path"`
+	Username string `json:"username"`
+	Email    string `json:"email"`
+}
+
+type generateKeyResponse struct {
+	KeyPath      string          `json:"key_path"`
+	PubPath      string          `json:"pub_path"`
+	PublicKey    string          `json:"public_key"`
+	Fingerprint  string          `json:"fingerprint"`
+	Metadata     keygen.Metadata `json:"metadata"`
+	PermissionOK bool            `json:"permission_ok"`
+}
+
+func (s *Server) generateKey(w http.ResponseWriter, r *http.Request) {
+	var v generateKeyRequest
+	if !decodeJSON(w, r, &v) {
+		return
+	}
+	result, metadata, err := s.service.GenerateKey(v.KeyPath, v.Username, v.Email)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, generateKeyResponse{KeyPath: result.KeyPath, PubPath: result.PubPath, PublicKey: result.PublicKey, Fingerprint: result.Fingerprint, Metadata: metadata, PermissionOK: result.PermErr == nil})
 }
 
 type confirmRequest struct {

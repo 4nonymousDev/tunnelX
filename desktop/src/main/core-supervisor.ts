@@ -10,6 +10,8 @@ import type {
   CoreEventDTO,
   CoreStatus,
   EndpointFile,
+  KeyGenerationRequestDTO,
+  KeyGenerationResultDTO,
   SettingsDTO,
   SnapshotDTO,
   TunnelConfigDTO,
@@ -105,6 +107,11 @@ export class CoreSupervisor {
     const client = await this.getClient()
     await client.updateSettings(settings)
     return this.refreshSnapshot()
+  }
+
+  async generateKey(request: KeyGenerationRequestDTO): Promise<KeyGenerationResultDTO> {
+    const client = await this.getClient()
+    return client.generateKey<KeyGenerationResultDTO>(request)
   }
 
   async confirm(id: number, accept: boolean): Promise<SnapshotDTO> {

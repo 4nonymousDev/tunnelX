@@ -18,12 +18,11 @@
           <input v-model.trim="form.server_addr" class="input" placeholder="example.com:22" required />
         </label>
         <label class="field">
-          <span class="field-label">SSH 用户</span>
-          <input v-model.trim="form.server_user" class="input" placeholder="tunnel" required />
-        </label>
-        <label class="field">
           <span class="field-label">私钥路径</span>
-          <input v-model.trim="form.key_path" class="input" placeholder="D:\keys\tunnel_key" required />
+          <span class="key-path-row">
+            <input v-model.trim="form.key_path" class="input" placeholder="D:\keys\tunnel_key" required />
+            <button class="button button-secondary" type="button" :disabled="busy || !form.key_path" @click="emit('generate', form.key_path)">生成</button>
+          </span>
         </label>
       </div>
       <p class="settings-hint">设置保存在核心配置中；若当前已连接，保存后核心会自动重建连接。</p>
@@ -41,8 +40,8 @@ import { reactive, watch } from 'vue'
 import type { SettingsDTO, SnapshotDTO } from '@shared/dto'
 
 const props = defineProps<{ open: boolean; snapshot?: SnapshotDTO; busy: boolean }>()
-const emit = defineEmits<{ close: []; save: [settings: SettingsDTO] }>()
-const form = reactive<SettingsDTO>({ name: '', server_addr: '', server_user: '', key_path: '' })
+const emit = defineEmits<{ close: []; save: [settings: SettingsDTO]; generate: [keyPath: string] }>()
+const form = reactive<SettingsDTO>({ name: '', server_addr: '', key_path: '' })
 
 watch(
   () => [props.open, props.snapshot] as const,
@@ -51,7 +50,6 @@ watch(
     Object.assign(form, {
       name: props.snapshot.name,
       server_addr: props.snapshot.server_addr,
-      server_user: props.snapshot.server_user,
       key_path: props.snapshot.key_path,
     })
   },
@@ -73,6 +71,7 @@ function submit(): void {
 .form-grid { display: grid; gap: 15px; }
 .field { display: grid; gap: 7px; }
 .field-label { color: #c3cad8; font-size: 12px; }
+.key-path-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
 .settings-hint { margin: 16px 0 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 24px; }
 </style>

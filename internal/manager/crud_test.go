@@ -24,7 +24,6 @@ func newTestManager(t *testing.T, tunnels ...config.Tunnel) (*Manager, string) {
 		ID:         "test-id",
 		Name:       "测试机",
 		ServerAddr: "1.2.3.4:2222",
-		ServerUser: "m1",
 		KeyPath:    "tunnel_key",
 		Tunnels:    tunnels,
 	}

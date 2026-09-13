@@ -77,7 +77,6 @@ func TestDeploymentFlow(t *testing.T) {
 		ID:         "deploy-test-id",
 		Name:       "测试机",
 		ServerAddr: addr,
-		ServerUser: "root",
 		KeyPath:    clientKeyPath,
 		Tunnels: []config.Tunnel{{
 			Kind:      config.KindExport,
@@ -198,7 +197,6 @@ func TestWrongPortGivesClearError(t *testing.T) {
 		ID:         "id",
 		Name:       "机器",
 		ServerAddr: ln.Addr().String(),
-		ServerUser: "root",
 		KeyPath:    keyPath,
 	}, log, "0.1.0", func() {})
 	m.SetPrompts(

@@ -216,7 +216,7 @@ func runControl(command, endpoint string, follow bool, confirmationID uint64, ac
 	}
 	switch command {
 	case "status":
-		fmt.Printf("TunnelX %s@%s: %s\n", snapshot.ServerUser, snapshot.ServerAddr, snapshot.Connection.State)
+		fmt.Printf("TunnelX %s: %s\n", snapshot.ServerAddr, snapshot.Connection.State)
 		if snapshot.Connection.Reason != "" {
 			fmt.Println(snapshot.Connection.Reason)
 		}

@@ -1,6 +1,6 @@
 import { clipboard, ipcMain } from 'electron'
 
-import type { SettingsDTO, TunnelConfigDTO } from '../shared/dto'
+import type { KeyGenerationRequestDTO, SettingsDTO, TunnelConfigDTO } from '../shared/dto'
 import {
   IPC,
   type ConfirmationRequest,
@@ -26,6 +26,7 @@ export function registerIpc(supervisor: CoreSupervisor): void {
     return supervisor.deleteTunnel(text(value, '隧道 ID'))
   })
   ipcMain.handle(IPC.updateSettings, (_event, value: unknown) => supervisor.updateSettings(settings(value)))
+  ipcMain.handle(IPC.generateKey, (_event, value: unknown) => supervisor.generateKey(keyGeneration(value)))
   ipcMain.handle(IPC.copyText, (_event, value: unknown) => {
     if (typeof value !== 'string' || value.length > 1_000_000) throw new Error('诊断文本无效或过大')
     clipboard.writeText(value)
@@ -67,8 +68,16 @@ function settings(value: unknown): SettingsDTO {
   return {
     name: optionalText(input.name),
     server_addr: optionalText(input.server_addr),
-    server_user: optionalText(input.server_user),
     key_path: optionalText(input.key_path),
+  }
+}
+
+function keyGeneration(value: unknown): KeyGenerationRequestDTO {
+  const input = record(value) as Partial<KeyGenerationRequestDTO>
+  return {
+    key_path: text(input.key_path, '私钥路径').trim(),
+    username: text(input.username, '用户名').trim(),
+    email: text(input.email, '邮箱').trim(),
   }
 }
 

@@ -48,6 +48,9 @@ type Session struct {
 type Client struct {
 	Fingerprint        string     `json:"fingerprint"`
 	Note               string     `json:"note"`
+	Username           string     `json:"username,omitempty"`
+	Email              string     `json:"email,omitempty"`
+	ComputerName       string     `json:"computer_name,omitempty"`
 	FirstSeenAt        time.Time  `json:"first_seen_at"`
 	LastSeenAt         time.Time  `json:"last_seen_at"`
 	LastIP             string     `json:"last_ip"`
@@ -117,6 +120,17 @@ type BlockRequest struct {
 	ExpiresAt *time.Time
 }
 
+type ImportPublicKeyRequest struct {
+	PublicKey, Username, Email, ComputerName, Reason string
+}
+
+type ImportPublicKeyResult struct {
+	Fingerprint  string `json:"fingerprint"`
+	Username     string `json:"username"`
+	Email        string `json:"email"`
+	ComputerName string `json:"computer_name"`
+}
+
 // Backend is the intentionally narrow boundary between HTTP and server state.
 // Implementations must treat Cursor as an exclusive (time,id) ordering key.
 type Backend interface {
@@ -126,6 +140,7 @@ type Backend interface {
 	DisconnectSession(context.Context, string, string) error
 	ListClients(context.Context, ListQuery) (Page[Client], error)
 	GetClient(context.Context, string) (Client, error)
+	ImportPublicKey(context.Context, ImportPublicKeyRequest) (ImportPublicKeyResult, error)
 	UpdateClientNote(context.Context, string, string, string) error
 	BlockClient(context.Context, string, BlockRequest) error
 	UnblockClient(context.Context, string, string) error

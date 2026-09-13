@@ -29,7 +29,6 @@ func TestSettingsRoundTrip(t *testing.T) {
 	// 模拟用户在设置表单里的修改。
 	// Simulate changes made through the settings form.
 	cfg.ServerAddr = "example.com:2222"
-	cfg.ServerUser = "m1"
 	cfg.KeyPath = "tunnel_key"
 	cfg.Name = "新名称"
 
@@ -52,7 +51,6 @@ func TestSettingsRoundTrip(t *testing.T) {
 		want  string
 	}{
 		{"ServerAddr", back.ServerAddr, "example.com:2222"},
-		{"ServerUser", back.ServerUser, "m1"},
 		{"KeyPath", back.KeyPath, "tunnel_key"},
 		{"Name", back.Name, "新名称"},
 		{"ID", back.ID, "stable-id"},

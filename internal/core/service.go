@@ -4,10 +4,12 @@ package core
 
 import (
 	"errors"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"tunnelx/internal/config"
+	"tunnelx/internal/keygen"
 	"tunnelx/internal/logbuf"
 	"tunnelx/internal/manager"
 	"tunnelx/internal/proto"
@@ -266,7 +268,7 @@ func (s *Service) UsedListenPorts() map[int]bool {
 
 // UpdateSettings persists connection settings and rebuilds an active connection so
 // runtime state never diverges from the saved configuration.
-func (s *Service) UpdateSettings(name, addr, user, keyPath string) error {
+func (s *Service) UpdateSettings(name, addr, keyPath string) error {
 	s.ops.Lock()
 	defer s.ops.Unlock()
 	wasRunning := s.mgr.ConnStatus().State != manager.ConnIdle
@@ -274,15 +276,14 @@ func (s *Service) UpdateSettings(name, addr, user, keyPath string) error {
 		s.cancelConfirmations()
 		s.mgr.Stop()
 	}
-	oldName, oldAddr, oldUser, oldKeyPath := s.cfg.Name, s.cfg.ServerAddr, s.cfg.ServerUser, s.cfg.KeyPath
+	oldName, oldAddr, oldKeyPath := s.cfg.Name, s.cfg.ServerAddr, s.cfg.KeyPath
 	if name != "" {
 		s.cfg.Name = name
 	}
 	s.cfg.ServerAddr = addr
-	s.cfg.ServerUser = user
 	s.cfg.KeyPath = keyPath
 	if err := s.cfg.Save(); err != nil {
-		s.cfg.Name, s.cfg.ServerAddr, s.cfg.ServerUser, s.cfg.KeyPath = oldName, oldAddr, oldUser, oldKeyPath
+		s.cfg.Name, s.cfg.ServerAddr, s.cfg.KeyPath = oldName, oldAddr, oldKeyPath
 		if wasRunning {
 			s.mgr.Start()
 		}
@@ -293,6 +294,30 @@ func (s *Service) UpdateSettings(name, addr, user, keyPath string) error {
 	}
 	s.publish(Event{Kind: EventTunnels})
 	return nil
+}
+
+// GenerateKey creates a key at the path currently entered in connection settings.
+// Relative paths are resolved from the configuration directory.
+func (s *Service) GenerateKey(keyPath, username, email string) (keygen.Result, keygen.Metadata, error) {
+	s.ops.Lock()
+	defer s.ops.Unlock()
+	if keyPath == "" {
+		keyPath = config.DefaultKeyName
+	}
+	resolved := keyPath
+	if !filepath.IsAbs(resolved) {
+		dir, err := s.cfg.BaseDir()
+		if err != nil {
+			return keygen.Result{}, keygen.Metadata{}, err
+		}
+		resolved = filepath.Join(dir, resolved)
+	}
+	metadata, err := keygen.NewMetadata(username, email)
+	if err != nil {
+		return keygen.Result{}, keygen.Metadata{}, err
+	}
+	result, err := keygen.GenerateWithMetadata(filepath.Dir(resolved), filepath.Base(resolved), metadata)
+	return result, metadata, err
 }
 
 // Subscribe returns an ordered, best-effort event stream. Events are dropped for a

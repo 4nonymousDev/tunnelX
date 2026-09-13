@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -49,6 +50,27 @@ func TestLoadRealConfig(t *testing.T) {
 	}
 	if c.Tunnels[0].LocalPort != 9999 {
 		t.Errorf("LocalPort = %d, 期望 9999", c.Tunnels[0].LocalPort)
+	}
+}
+
+func TestLoadPathIgnoresAndDropsLegacySSHUser(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"server_user":"root","key_path":"tunnel_key"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadPath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = c.Save(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "server_user") {
+		t.Fatalf("legacy server_user was persisted: %s", data)
 	}
 }
 
@@ -210,7 +232,6 @@ func TestSavePreservesKeyPath(t *testing.T) {
 		ID:         "test-id",
 		Name:       "测试机",
 		ServerAddr: "1.2.3.4:2222",
-		ServerUser: "m1",
 		KeyPath:    "tunnel_key",
 		Tunnels: []Tunnel{{
 			Kind:      KindExport,

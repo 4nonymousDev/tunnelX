@@ -15,6 +15,7 @@ type fakeBackend struct {
 	disconnectID, reason     string
 	noteFP, note, noteReason string
 	blockedFP                string
+	importRequest            ImportPublicKeyRequest
 	audit                    []AuditEvent
 }
 
@@ -52,8 +53,28 @@ func (f *fakeBackend) BlockClient(_ context.Context, fp string, _ BlockRequest) 
 	return nil
 }
 func (f *fakeBackend) UnblockClient(context.Context, string, string) error { return nil }
+func (f *fakeBackend) ImportPublicKey(_ context.Context, request ImportPublicKeyRequest) (ImportPublicKeyResult, error) {
+	f.importRequest = request
+	return ImportPublicKeyResult{Fingerprint: "SHA256:imported"}, nil
+}
 func (f *fakeBackend) ListAuditEvents(context.Context, ListQuery) (Page[AuditEvent], error) {
 	return Page[AuditEvent]{Items: f.audit}, nil
+}
+
+func TestImportPublicKey(t *testing.T) {
+	f := &fakeBackend{}
+	s := newTestServer(t, f)
+	body := `{"public_key":"ssh-ed25519 AAAA comment","username":" alice ","email":" alice@example.com ","computer_name":" workstation ","reason":" onboarding "}`
+	w := request(s, http.MethodPost, "/api/v1/clients/import-key", body, "secret", "application/json")
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"fingerprint":"SHA256:imported"`) {
+		t.Fatalf("unexpected response body: %s", w.Body.String())
+	}
+	if f.importRequest.Username != "alice" || f.importRequest.Email != "alice@example.com" || f.importRequest.ComputerName != "workstation" || f.importRequest.Reason != "onboarding" {
+		t.Fatalf("request was not normalized: %#v", f.importRequest)
+	}
 }
 func (f *fakeBackend) ListAdminActions(context.Context, ListQuery) (Page[AdminAction], error) {
 	return Page[AdminAction]{Items: []AdminAction{}}, nil

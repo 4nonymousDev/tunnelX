@@ -23,6 +23,9 @@ export interface SessionDto {
 export interface ClientDto {
   fingerprint: string
   note: string
+  username?: string
+  email?: string
+  computer_name?: string
   first_seen_at: string | number
   last_seen_at: string | number
   last_ip: string
@@ -37,6 +40,21 @@ export interface ClientDto {
   effective_access: boolean
   block_reason?: string
   block_expires_at?: string | number | null
+}
+
+export interface ImportPublicKeyRequestDto {
+  public_key: string
+  username: string
+  email: string
+  computer_name: string
+  reason: string
+}
+
+export interface ImportPublicKeyResultDto {
+  fingerprint: string
+  username: string
+  email: string
+  computer_name: string
 }
 
 export interface OverviewDto {

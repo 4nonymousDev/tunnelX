@@ -51,6 +51,10 @@ export class CoreApiClient {
     await this.request<void>('PUT', '/v1/settings', settings)
   }
 
+  async generateKey<T>(request: unknown): Promise<T> {
+    return this.request<T>('POST', '/v1/keys/generate', request)
+  }
+
   async confirm(id: number, accept: boolean): Promise<void> {
     await this.request<void>('POST', `/v1/confirm/${id}`, { accept })
   }

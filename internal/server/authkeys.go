@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,7 +26,10 @@ type authKeys struct {
 	size         int64
 	hash         [sha256.Size]byte
 	checkedAt    time.Time
+	importMu     sync.Mutex
 }
+
+var errAuthorizedKeyExists = errors.New("public key is already authorized")
 
 const reloadInterval = 2 * time.Second
 
@@ -109,6 +114,58 @@ func (a *authKeys) AuthorizedFingerprint(fp string) bool {
 	return a.fingerprints[fp]
 }
 func (a *authKeys) Count() int { a.mu.RLock(); defer a.mu.RUnlock(); return len(a.keys) }
+
+func (a *authKeys) Import(publicKey, comment string) (string, error) {
+	a.importMu.Lock()
+	defer a.importMu.Unlock()
+	raw := []byte(strings.TrimSpace(publicKey))
+	key, _, _, rest, err := ssh.ParseAuthorizedKey(raw)
+	if err != nil || len(bytes.TrimSpace(rest)) != 0 {
+		if err == nil {
+			err = errors.New("multiple public keys are not allowed")
+		}
+		return "", fmt.Errorf("invalid public key: %w", err)
+	}
+	fp := ssh.FingerprintSHA256(key)
+	data, err := os.ReadFile(a.path)
+	if err != nil {
+		return "", err
+	}
+	_, fps, err := parseAuthorizedKeys(data)
+	if err != nil {
+		return "", err
+	}
+	if fps[fp] {
+		return "", errAuthorizedKeyExists
+	}
+	line := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(key)))
+	if comment = strings.TrimSpace(comment); comment != "" {
+		line += " " + comment
+	}
+	prefix := ""
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		prefix = "\n"
+	}
+	f, err := os.OpenFile(a.path, os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return "", err
+	}
+	_, writeErr := f.WriteString(prefix + line + "\n")
+	if writeErr == nil {
+		writeErr = f.Sync()
+	}
+	closeErr := f.Close()
+	if writeErr != nil {
+		return "", writeErr
+	}
+	if closeErr != nil {
+		return "", closeErr
+	}
+	if err := a.load(); err != nil {
+		return "", err
+	}
+	return fp, nil
+}
 
 func (a *authKeys) maybeReload() {
 	a.mu.RLock()
