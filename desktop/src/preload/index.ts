@@ -21,6 +21,10 @@ const IPC = {
   generateKey: 'tunnelx:key:generate',
   copyText: 'tunnelx:clipboard:write',
   confirm: 'tunnelx:confirm',
+  getUpdateState: 'tunnelx:update:get-state',
+  checkForUpdates: 'tunnelx:update:check',
+  downloadUpdate: 'tunnelx:update:download',
+  installUpdate: 'tunnelx:update:install',
   event: 'tunnelx:event',
 } as const
 
@@ -38,6 +42,10 @@ const api: TunnelXDesktopAPI = {
   generateKey: (request: KeyGenerationRequestDTO) => ipcRenderer.invoke(IPC.generateKey, request),
   copyText: (text: string) => ipcRenderer.invoke(IPC.copyText, text),
   confirm: (id: number, accept: boolean) => ipcRenderer.invoke(IPC.confirm, { id, accept }),
+  getUpdateState: () => ipcRenderer.invoke(IPC.getUpdateState),
+  checkForUpdates: () => ipcRenderer.invoke(IPC.checkForUpdates),
+  downloadUpdate: () => ipcRenderer.invoke(IPC.downloadUpdate),
+  installUpdate: () => ipcRenderer.invoke(IPC.installUpdate),
   onEvent: (listener: (event: DesktopEvent) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, payload: DesktopEvent) => listener(payload)
     ipcRenderer.on(IPC.event, handler)

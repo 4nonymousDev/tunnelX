@@ -8,6 +8,9 @@
       </div>
     </div>
     <div class="header-actions">
+      <button v-if="updateAvailable" class="update-notice" type="button" @click="emit('update')">
+        <span class="update-dot" />发现新版本
+      </button>
       <span class="status-pill" :class="statusClass">
         <span class="status-dot" />{{ stateLabel }}
       </span>
@@ -40,12 +43,14 @@ const props = defineProps<{
   coreStatus: CoreStatus
   serverAddress?: string
   busy: boolean
+  updateAvailable?: boolean
 }>()
 
 const emit = defineEmits<{
   connect: []
   disconnect: []
   settings: []
+  update: []
 }>()
 
 const corePhase = computed(() => props.coreStatus.phase)
@@ -73,6 +78,9 @@ const subtitle = computed(() => props.serverAddress || '尚未配置服务器')
 .brand-title { margin: 0; font-size: 18px; letter-spacing: -.02em; }
 .brand-subtitle { margin: 3px 0 0; overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .header-actions { display: flex; align-items: center; gap: 10px; -webkit-app-region: no-drag; }
+.update-notice { display: inline-flex; align-items: center; gap: 7px; padding: 6px 4px; border: 0; color: #67d8f3; font: inherit; font-size: 12px; font-weight: 700; background: transparent; cursor: pointer; }
+.update-notice:hover { color: #a5efff; }
+.update-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; box-shadow: 0 0 12px currentColor; }
 .status-pill { display: inline-flex; align-items: center; gap: 8px; margin-right: 4px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 12px; }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; box-shadow: 0 0 12px currentColor; }
 .status-connected { color: var(--success); }

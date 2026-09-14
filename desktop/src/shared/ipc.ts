@@ -22,13 +22,44 @@ export const IPC = {
   generateKey: 'tunnelx:key:generate',
   copyText: 'tunnelx:clipboard:write',
   confirm: 'tunnelx:confirm',
+  getUpdateState: 'tunnelx:update:get-state',
+  checkForUpdates: 'tunnelx:update:check',
+  downloadUpdate: 'tunnelx:update:download',
+  installUpdate: 'tunnelx:update:install',
   event: 'tunnelx:event',
 } as const
+
+export type UpdatePhase =
+  | 'idle'
+  | 'checking'
+  | 'available'
+  | 'not-available'
+  | 'downloading'
+  | 'downloaded'
+  | 'installing'
+  | 'error'
+  | 'unsupported'
+
+export interface UpdateState {
+  phase: UpdatePhase
+  currentGuiVersion: string
+  currentCliVersion: string
+  latestGuiVersion?: string
+  releaseName?: string
+  releaseNotes?: string
+  percent?: number
+  bytesPerSecond?: number
+  transferred?: number
+  total?: number
+  checkedAt?: string
+  message?: string
+}
 
 export type DesktopEvent =
   | { type: 'snapshot'; snapshot: SnapshotDTO }
   | { type: 'log'; log: LogDTO }
   | { type: 'core-status'; status: CoreStatus }
+  | { type: 'update'; state: UpdateState }
   | { type: 'error'; message: string }
 
 export interface BootstrapResult {
@@ -60,5 +91,9 @@ export interface TunnelXDesktopAPI {
   generateKey(request: KeyGenerationRequestDTO): Promise<KeyGenerationResultDTO>
   copyText(text: string): Promise<void>
   confirm(id: number, accept: boolean): Promise<SnapshotDTO>
+  getUpdateState(): Promise<UpdateState>
+  checkForUpdates(): Promise<UpdateState>
+  downloadUpdate(): Promise<UpdateState>
+  installUpdate(): Promise<void>
   onEvent(listener: (event: DesktopEvent) => void): () => void
 }

@@ -8,7 +8,7 @@ import type {
   SnapshotDTO,
   TunnelConfigDTO,
 } from '@shared/dto'
-import type { DesktopEvent, TunnelXDesktopAPI } from '@shared/ipc'
+import type { DesktopEvent, TunnelXDesktopAPI, UpdateState } from '@shared/ipc'
 import { normalizeSnapshot } from '@shared/snapshot'
 
 const BRIDGE_UNAVAILABLE = '桌面通信桥未加载。请通过 Electron 启动 TunnelX（开发环境请使用 npm run dev），不要直接在浏览器打开 Vite 页面。'
@@ -19,6 +19,11 @@ export function useTunnelX() {
   const logs = shallowRef<NonNullable<SnapshotDTO['logs']>>([])
   const busy = shallowRef(false)
   const error = shallowRef('')
+  const updateState = shallowRef<UpdateState>({
+    phase: 'idle',
+    currentGuiVersion: '未知',
+    currentCliVersion: '未知',
+  })
   let unsubscribe: (() => void) | undefined
   let desktop: TunnelXDesktopAPI | undefined
 
@@ -38,6 +43,7 @@ export function useTunnelX() {
       const result = await bridge().bootstrap()
       status.value = result.status
       applySnapshot(result.snapshot)
+      updateState.value = await bridge().getUpdateState()
     })
   })
 
@@ -47,6 +53,7 @@ export function useTunnelX() {
     if (event.type === 'snapshot') applySnapshot(event.snapshot)
     if (event.type === 'log') logs.value = [...logs.value, event.log].slice(-1000)
     if (event.type === 'core-status') status.value = event.status
+    if (event.type === 'update') updateState.value = event.state
     if (event.type === 'error') error.value = event.message
   }
 
@@ -115,6 +122,23 @@ export function useTunnelX() {
     }, false)
   }
 
+  async function checkForUpdates(): Promise<UpdateState> {
+    return executeUpdate(() => bridge().checkForUpdates())
+  }
+
+  async function downloadUpdate(): Promise<UpdateState> {
+    return executeUpdate(() => bridge().downloadUpdate())
+  }
+
+  async function installUpdate(): Promise<void> {
+    error.value = ''
+    try {
+      await bridge().installUpdate()
+    } catch (reason) {
+      error.value = reason instanceof Error ? reason.message : String(reason)
+    }
+  }
+
   function clearError(): void {
     error.value = ''
   }
@@ -144,12 +168,25 @@ export function useTunnelX() {
     }
   }
 
+  async function executeUpdate(operation: () => Promise<UpdateState>): Promise<UpdateState> {
+    error.value = ''
+    try {
+      const next = await operation()
+      updateState.value = next
+      return next
+    } catch (reason) {
+      error.value = reason instanceof Error ? reason.message : String(reason)
+      return updateState.value
+    }
+  }
+
   return {
     snapshot: shallowReadonly(snapshot),
     status: shallowReadonly(status),
     logs: shallowReadonly(logs),
     busy: shallowReadonly(busy),
     error: shallowReadonly(error),
+    updateState: shallowReadonly(updateState),
     connection,
     tunnels,
     pendingConfirmation,
@@ -165,6 +202,9 @@ export function useTunnelX() {
     generateKey,
     copyText,
     confirm,
+    checkForUpdates,
+    downloadUpdate,
+    installUpdate,
     clearError,
   }
 }

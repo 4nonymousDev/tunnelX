@@ -15,9 +15,11 @@
     "package": "npm run build && electron-builder"
   },
   "dependencies": {
+    "electron-updater": "^6.8.9",
     "vue": "^3.5.21"
   },
   "devDependencies": {
+    "@electron/asar": "^3.4.1",
     "@types/node": "^22.18.1",
     "@vitejs/plugin-vue": "^6.0.1",
     "electron": "^38.0.0",
@@ -43,8 +45,17 @@
     "directories": {
       "output": "release"
     },
+    "afterPack": "scripts/verify-package.cjs",
     "win": {
       "target": "nsis"
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "4nonymousDev",
+        "repo": "tunnelX",
+        "releaseType": "release"
+      }
+    ]
   }
 }

@@ -14,10 +14,11 @@ export function buildDiagnosticReport(
     refresh_error: refreshError,
     core_status: coreStatus,
     client: snapshot ? {
-      id: snapshot.id,
-      name: snapshot.name,
-      server_addr: snapshot.server_addr,
-      key_path: snapshot.key_path,
+      client_version: snapshot.client_version,
+      identity_configured: Boolean(snapshot.id),
+      name_configured: Boolean(snapshot.name),
+      server_configured: Boolean(snapshot.server_addr),
+      key_configured: Boolean(snapshot.key_path),
       connection: snapshot.connection,
     } : null,
     registry: {

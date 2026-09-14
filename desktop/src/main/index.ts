@@ -12,10 +12,12 @@ import type { CoreStatus, SnapshotDTO } from '../shared/dto'
 import { CoreSupervisor } from './core-supervisor'
 import { registerIpc } from './ipc'
 import { trayIcon, trayPresentation, type TrayState } from './tray'
+import { UpdateManager } from './update-manager'
 
 let mainWindow: BrowserWindow | undefined
 let tray: Tray | undefined
 let supervisor: CoreSupervisor | undefined
+let updates: UpdateManager | undefined
 let isQuitting = false
 let quitRequested = false
 let coreShutdownComplete = false
@@ -33,19 +35,30 @@ if (!hasLock) {
 
 async function startDesktop(): Promise<void> {
   supervisor = new CoreSupervisor()
-  registerIpc(supervisor)
+  updates = new UpdateManager(prepareUpdateInstall)
+  registerIpc(supervisor, updates)
   supervisor.subscribe(event => {
-    if (event.type === 'snapshot') latestSnapshot = event.snapshot
+    if (event.type === 'snapshot') {
+      latestSnapshot = event.snapshot
+      updates?.setCoreVersion(event.snapshot.client_version)
+    }
     if (event.type === 'core-status') latestCoreStatus = event.status
     updateTrayAppearance()
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(IPC.event, event)
     }
   })
+  updates.subscribe(state => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send(IPC.event, { type: 'update', state })
+    }
+  })
   createWindow()
   createTray()
+  updates.start()
   void supervisor.initialize().then(snapshot => {
     latestSnapshot = snapshot
+    updates?.setCoreVersion(snapshot.client_version)
     latestCoreStatus = supervisor?.getStatus() ?? latestCoreStatus
     updateTrayAppearance()
   }).catch(() => {
@@ -151,6 +164,24 @@ function requestQuit(): void {
   })()
 }
 
+async function prepareUpdateInstall(): Promise<void> {
+  if (quitRequested && !coreShutdownComplete) {
+    throw new Error('应用正在退出，请稍后重试更新安装')
+  }
+  quitRequested = true
+  isQuitting = true
+  tray?.setToolTip('TunnelX — 正在准备更新…')
+  try {
+    await supervisor?.shutdown()
+    coreShutdownComplete = true
+  } catch (error) {
+    quitRequested = false
+    isQuitting = false
+    updateTrayAppearance()
+    throw error
+  }
+}
+
 app.on('before-quit', (event) => {
   isQuitting = true
   if (supervisor && !coreShutdownComplete) {
@@ -159,6 +190,7 @@ app.on('before-quit', (event) => {
     return
   }
   supervisor?.closeFrontend()
+  updates?.stop()
   tray?.destroy()
 })
 

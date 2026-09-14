@@ -8,6 +8,13 @@ known_hosts
 authorized_keys
 *.pem
 *.key
+*.pfx
+*.p12
+*.jks
+*.keystore
+.env
+.env.*
+!.env.example
 id_rsa*
 id_ed25519*
 config.json

@@ -5,9 +5,11 @@
       :core-status="status"
       :server-address="snapshot?.server_addr"
       :busy="busy"
+      :update-available="updateAvailable"
       @connect="connect"
       @disconnect="disconnect"
       @settings="settingsOpen = true"
+      @update="updateDialogOpen = true"
     />
 
     <main class="workspace">
@@ -82,9 +84,17 @@
       :snapshot="snapshot"
       :busy="busy"
       :key-path-override="keyGenerationResult?.key_path"
+      :update-state="updateState"
       @close="settingsOpen = false"
       @save="saveSettings"
       @generate="openKeyGenerator"
+      @check-update="checkUpdateFromSettings"
+    />
+    <UpdateDialog
+      :open="updateDialogOpen"
+      :state="updateState"
+      @close="updateDialogOpen = false"
+      @confirm="beginUpdate"
     />
     <KeyGenerationDialog
       :open="keyDialogOpen"
@@ -128,6 +138,7 @@ import LogPanel from './LogPanel.vue'
 import SettingsDialog from './SettingsDialog.vue'
 import TunnelEditorDialog from './TunnelEditorDialog.vue'
 import TunnelList from './TunnelList.vue'
+import UpdateDialog from './UpdateDialog.vue'
 
 type WorkspaceTab = TunnelKind | 'logs'
 
@@ -137,6 +148,7 @@ const {
   logs,
   busy,
   error,
+  updateState,
   connection,
   tunnels,
   pendingConfirmation,
@@ -152,6 +164,9 @@ const {
   generateKey,
   copyText,
   confirm,
+  checkForUpdates,
+  downloadUpdate,
+  installUpdate,
   clearError,
 } = useTunnelX()
 
@@ -166,6 +181,7 @@ const keyGenerationPath = shallowRef('')
 const keyGenerationResult = shallowRef<KeyGenerationResultDTO>()
 const importPickerOpen = shallowRef(false)
 const diagnosticsCopied = shallowRef(false)
+const updateDialogOpen = shallowRef(false)
 let diagnosticsResetTimer: ReturnType<typeof setTimeout> | undefined
 
 const visibleTunnels = computed(() => tunnels.value.filter(item => item.config.kind === activeTab.value))
@@ -189,6 +205,10 @@ const displayedConfirmation = computed<ConfirmationDTO | undefined>(() => {
 const confirmationTitle = computed(() => !pendingConfirmation.value && deleteTarget.value
   ? '删除这条隧道？'
   : undefined)
+const updateAvailable = computed(() => Boolean(
+  updateState.value.latestGuiVersion
+  && ['available', 'downloading', 'downloaded', 'installing', 'error'].includes(updateState.value.phase),
+))
 
 async function openNewTunnel(): Promise<void> {
   if (activeTab.value === 'logs') return
@@ -232,6 +252,19 @@ async function toggleTunnel(tunnel: TunnelDTO): Promise<void> {
 async function saveSettings(value: SettingsDTO): Promise<void> {
   await updateSettings(value)
   if (!error.value) settingsOpen.value = false
+}
+
+async function checkUpdateFromSettings(): Promise<void> {
+  const state = await checkForUpdates()
+  if (state.phase === 'available' || state.phase === 'downloading' || state.phase === 'downloaded') {
+    updateDialogOpen.value = true
+  }
+}
+
+async function beginUpdate(): Promise<void> {
+  updateDialogOpen.value = true
+  const state = await downloadUpdate()
+  if (state.phase === 'downloaded') await installUpdate()
 }
 
 function openKeyGenerator(path: string): void {

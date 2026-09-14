@@ -61,6 +61,7 @@ type TunnelSnapshot struct {
 }
 
 type Snapshot struct {
+	Version    string
 	Config     config.Config
 	Connection manager.ConnStatus
 	Tunnels    []TunnelSnapshot
@@ -80,6 +81,7 @@ type Service struct {
 	cfg     *config.Config
 	log     *logbuf.Buffer
 	mgr     *manager.Manager
+	version string
 	confirm ConfirmationHandler
 
 	mu            sync.RWMutex
@@ -101,7 +103,7 @@ func New(cfg *config.Config, opts Options) (*Service, error) {
 		log = logbuf.New(nil)
 	}
 	s := &Service{
-		cfg: cfg, log: log, confirm: opts.Confirmation,
+		cfg: cfg, log: log, version: opts.Version, confirm: opts.Confirmation,
 		subs: make(map[uint64]chan Event), pending: make(map[uint64]*Confirmation),
 	}
 	s.mgr = manager.New(cfg, log, opts.Version, func() { s.publish(Event{Kind: EventTunnels}) })
@@ -156,6 +158,7 @@ func (s *Service) Snapshot(minLogLevel logbuf.Level) Snapshot {
 	s.ops.Lock()
 	defer s.ops.Unlock()
 	snap := Snapshot{
+		Version:    s.version,
 		Config:     cloneConfig(s.cfg),
 		Connection: s.mgr.ConnStatus(),
 		Registry:   s.mgr.Registry(),

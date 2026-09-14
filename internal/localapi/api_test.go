@@ -42,7 +42,7 @@ func TestServerAuthenticatesAndPreventsDuplicateOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Version != APIVersion || snapshot.ID != "api-test" || snapshot.Connection.State != "idle" {
+	if snapshot.Version != APIVersion || snapshot.ClientVersion != "test" || snapshot.ID != "api-test" || snapshot.Connection.State != "idle" {
 		t.Fatalf("unexpected snapshot: %#v", snapshot)
 	}
 	respCreate, err := client.request(context.Background(), http.MethodPost, "/v1/tunnels", TunnelConfigDTO{

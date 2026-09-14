@@ -68,6 +68,7 @@ export interface RegistryDTO {
 
 export interface SnapshotDTO {
   version: number
+  client_version?: string
   id: string
   name: string
   server_addr: string

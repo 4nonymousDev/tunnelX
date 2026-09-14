@@ -22,6 +22,13 @@ func testService(t *testing.T) *Service {
 	return s
 }
 
+func TestSnapshotReportsCoreVersion(t *testing.T) {
+	s := testService(t)
+	if got := s.Snapshot(logbuf.Debug).Version; got != "test" {
+		t.Fatalf("snapshot version=%q, want test", got)
+	}
+}
+
 func TestGenerateKeyEmbedsRequestedMetadata(t *testing.T) {
 	s := testService(t)
 	result, metadata, err := s.GenerateKey("generated_key", "alice", "alice@example.com")

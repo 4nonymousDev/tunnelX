@@ -25,7 +25,7 @@ npm run dev
 
 开发脚本会自动编译仓库根目录的 Go 核心和 Electron 主进程，再启动固定在 `127.0.0.1:5173` 的 Vite 服务与 Electron，无需制作安装包。Vue 页面支持热更新；Go 核心日志也会同步输出到当前 PowerShell 窗口。修改 Go 核心、Electron 主进程或 preload 后只需从托盘退出，再重新运行 `npm run dev`。
 
-运行日志页提供“复制诊断信息”，内容包括原始服务端注册表、UI 过滤原因、连接状态、隧道状态和最近 100 条日志，不包含本地控制令牌。反馈问题时直接粘贴该 JSON 即可。
+运行日志页提供“复制诊断信息”，内容包括服务端注册表、UI 过滤原因、连接状态、隧道状态和最近 100 条日志，不包含本地控制令牌，也不会直接复制本机 ID、名称、服务器地址或私钥路径。日志内容仍可能包含运行时地址，发布到公开 Issue 前请先检查。
 
 > 不要单独运行 `npm run dev:renderer` 后在普通浏览器打开页面。浏览器中没有
 > Electron preload 注入的 `window.tunnelx` 通信桥，因此无法读取或保存核心配置。
@@ -39,6 +39,31 @@ npm run package
 ```
 
 `npm run package` 使用 electron-builder，并将仓库根目录的 `tunnelx-cli.exe` 放进安装包的 `resources/core/`。
+
+## 自动更新与版本
+
+安装版启动 15 秒后检查 GitHub Releases，此后每 4 小时检查一次。发现新版时只在顶栏显示提示，不会自动下载；用户可以点击提示，或在“设置 → 应用版本”中手动检查。确认更新后界面显示下载进度，下载完成会先安全停止核心，再交给 NSIS 安装程序替换文件并重启。开发模式不会访问更新服务。
+
+GUI 与 CLI 使用独立的 [SemVer](https://semver.org/lang/zh-CN/) 版本号：
+
+- GUI 版本来自 `desktop/package.json`，GitHub Release 标签必须是 `v<GUI版本>`。
+- CLI 版本来自仓库根目录 `CLI_VERSION`，发布构建会把它注入 `tunnelx-cli.exe`。
+- 只修改 GUI 时只提升 GUI 版本；修改 CLI 时提升 CLI 版本，并至少提升 GUI 的补丁版本，因为桌面安装包是 CLI 更新的载体。
+
+仓库中的 `.github/workflows/release-desktop.yml` 负责在干净的 Windows runner 中测试、构建并发布 unsigned NSIS 产物。创建标签前先同步版本，然后推送标签：
+
+```powershell
+# 示例：GUI 0.1.1，CLI 仍为 0.1.0
+npm --prefix desktop version 0.1.1 --no-git-tag-version
+git add desktop/package.json desktop/package-lock.json
+git commit -m "release: GUI 0.1.1"
+git tag v0.1.1
+git push origin HEAD --tags
+```
+
+工作流只使用 GitHub 自动提供的 `GITHUB_TOKEN`，当前未配置 Windows 代码签名。首次使用时确认仓库 `Settings → Actions → General → Workflow permissions` 允许工作流写入 Releases。未签名安装程序可能触发 Windows SmartScreen 或“未知发布者”提示。
+
+更新只替换安装目录。用户的配置、SSH 密钥、known_hosts 和日志继续保存在 Electron `userData` 目录中，不随安装包上传，也不会在正常升级时删除。不要修改 `appId`、`productName` 或默认 `userData` 路径；这些变更必须配套数据迁移。
 
 ## 路径覆盖
 

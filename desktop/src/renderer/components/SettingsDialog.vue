@@ -26,6 +26,16 @@
         </label>
       </div>
       <p class="settings-hint">设置保存在核心配置中；若当前已连接，保存后核心会自动重建连接。</p>
+      <section class="update-section" aria-labelledby="version-title">
+        <div>
+          <h3 id="version-title" class="section-title">应用版本</h3>
+          <p class="version-copy">GUI {{ updateState.currentGuiVersion }} · CLI {{ updateState.currentCliVersion }}</p>
+          <p v-if="updateStatus" class="update-status" :class="{ error: updateState.phase === 'error' }">{{ updateStatus }}</p>
+        </div>
+        <button class="button button-secondary" type="button" :disabled="updateBusy" @click="emit('checkUpdate')">
+          {{ updateState.phase === 'checking' ? '检查中…' : '检查更新' }}
+        </button>
+      </section>
       <div class="dialog-actions">
         <button class="button button-secondary" type="button" @click="emit('close')">取消</button>
         <button class="button button-primary" type="submit" :disabled="busy">保存设置</button>
@@ -35,18 +45,33 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, watch } from 'vue'
+import { computed, reactive, watch } from 'vue'
 
 import type { SettingsDTO, SnapshotDTO } from '@shared/dto'
+import type { UpdateState } from '@shared/ipc'
 
 const props = defineProps<{
   open: boolean
   snapshot?: SnapshotDTO
   busy: boolean
   keyPathOverride?: string
+  updateState: UpdateState
 }>()
-const emit = defineEmits<{ close: []; save: [settings: SettingsDTO]; generate: [keyPath: string] }>()
+const emit = defineEmits<{
+  close: []
+  save: [settings: SettingsDTO]
+  generate: [keyPath: string]
+  checkUpdate: []
+}>()
 const form = reactive<SettingsDTO>({ name: '', server_addr: '', key_path: '' })
+const updateBusy = computed(() => ['checking', 'downloading', 'downloaded', 'installing'].includes(props.updateState.phase))
+const updateStatus = computed(() => {
+  if (props.updateState.phase === 'available') return `发现 GUI ${props.updateState.latestGuiVersion}`
+  if (props.updateState.phase === 'downloading') return `正在下载 ${Math.round(props.updateState.percent ?? 0)}%`
+  if (props.updateState.phase === 'downloaded' || props.updateState.phase === 'installing') return props.updateState.message
+  if (props.updateState.phase === 'not-available' || props.updateState.phase === 'unsupported' || props.updateState.phase === 'error') return props.updateState.message
+  return ''
+})
 
 watch(
   () => [props.open, props.snapshot] as const,
@@ -85,5 +110,10 @@ function submit(): void {
 .field-label { color: #c3cad8; font-size: 12px; }
 .key-path-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
 .settings-hint { margin: 16px 0 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.update-section { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); }
+.section-title { margin: 0; color: #c3cad8; font-size: 12px; }
+.version-copy { margin: 6px 0 0; color: var(--muted); font: 11px Consolas, monospace; }
+.update-status { margin: 6px 0 0; color: #67d8f3; font-size: 11px; }
+.update-status.error { color: #ffb0b8; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 24px; }
 </style>

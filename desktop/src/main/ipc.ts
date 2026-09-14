@@ -9,8 +9,9 @@ import {
   type UpdateTunnelRequest,
 } from '../shared/ipc'
 import type { CoreSupervisor } from './core-supervisor'
+import type { UpdateManager } from './update-manager'
 
-export function registerIpc(supervisor: CoreSupervisor): void {
+export function registerIpc(supervisor: CoreSupervisor, updates: UpdateManager): void {
   ipcMain.handle(IPC.bootstrap, async () => {
     const snapshot = await supervisor.initialize()
     return { status: supervisor.getStatus(), snapshot }
@@ -54,6 +55,10 @@ export function registerIpc(supervisor: CoreSupervisor): void {
     if (typeof request.accept !== 'boolean') throw new Error('无效的确认结果')
     return supervisor.confirm(Number(request.id), request.accept)
   })
+  ipcMain.handle(IPC.getUpdateState, () => updates.getState())
+  ipcMain.handle(IPC.checkForUpdates, () => updates.checkForUpdates())
+  ipcMain.handle(IPC.downloadUpdate, () => updates.downloadUpdate())
+  ipcMain.handle(IPC.installUpdate, () => updates.installUpdate())
 }
 
 function tunnelBatch(value: unknown): TunnelConfigDTO[] {
