@@ -38,7 +38,7 @@ npm run build
 npm run package
 ```
 
-`npm run package` 使用 electron-builder，同时生成 NSIS 安装版和 ZIP 便携版，并将仓库根目录的 `tunnelx-cli.exe` 放进两种产物的 `resources/core/`。便携版解压后可直接运行 `TunnelX.exe`，不要在压缩包内直接启动。
+`npm run package` 使用 electron-builder，同时生成 NSIS 安装版和 ZIP 便携版，并将仓库根目录的 `tunnelx-cli.exe` 放进两种产物的 `resources/core/`。NSIS 安装向导允许用户选择安装目录；便携版解压后可直接运行 `TunnelX.exe`，不要在压缩包内直接启动。
 
 ## 自动更新与版本
 

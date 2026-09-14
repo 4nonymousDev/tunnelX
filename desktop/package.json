@@ -52,6 +52,10 @@
         "zip"
       ]
     },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
     "publish": [
       {
         "provider": "github",

@@ -56,7 +56,8 @@ npm run package
 
 `npm run package` uses electron-builder to create both an NSIS installer and a
 portable ZIP, placing `tunnelx-cli.exe` from the repository root in each
-package's `resources/core/` directory. Extract the portable ZIP before running
+package's `resources/core/` directory. The NSIS setup wizard lets users choose
+the installation directory. Extract the portable ZIP before running
 `TunnelX.exe`; do not launch it from inside the archive.
 
 ## Auto updates and versions
