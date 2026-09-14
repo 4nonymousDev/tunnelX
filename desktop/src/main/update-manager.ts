@@ -2,6 +2,7 @@ import { app } from 'electron'
 import { autoUpdater, type ProgressInfo, type UpdateInfo } from 'electron-updater'
 
 import type { UpdateState } from '../shared/ipc'
+import { releaseNoteAsPlainText } from '../shared/release-notes'
 
 const FIRST_CHECK_DELAY_MS = 15_000
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000
@@ -185,10 +186,10 @@ export class UpdateManager {
 }
 
 function releaseNotes(info: UpdateInfo): string | undefined {
-  if (typeof info.releaseNotes === 'string') return info.releaseNotes.trim() || undefined
+  if (typeof info.releaseNotes === 'string') return releaseNoteAsPlainText(info.releaseNotes) || undefined
   if (!Array.isArray(info.releaseNotes)) return undefined
   const notes = info.releaseNotes
-    .map(item => [item.version, item.note].filter(Boolean).join('\n'))
+    .map(item => [item.version, item.note ? releaseNoteAsPlainText(item.note) : ''].filter(Boolean).join('\n'))
     .filter(Boolean)
   return notes.length ? notes.join('\n\n') : undefined
 }
