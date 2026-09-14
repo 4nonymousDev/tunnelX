@@ -25,6 +25,9 @@ const IPC = {
   checkForUpdates: 'tunnelx:update:check',
   downloadUpdate: 'tunnelx:update:download',
   installUpdate: 'tunnelx:update:install',
+  getLockState: 'tunnelx:lock:get-state',
+  lockInterface: 'tunnelx:lock:lock',
+  unlockInterface: 'tunnelx:lock:unlock',
   event: 'tunnelx:event',
 } as const
 
@@ -46,6 +49,9 @@ const api: TunnelXDesktopAPI = {
   checkForUpdates: () => ipcRenderer.invoke(IPC.checkForUpdates),
   downloadUpdate: () => ipcRenderer.invoke(IPC.downloadUpdate),
   installUpdate: () => ipcRenderer.invoke(IPC.installUpdate),
+  getLockState: () => ipcRenderer.invoke(IPC.getLockState),
+  lockInterface: (password: string) => ipcRenderer.invoke(IPC.lockInterface, password),
+  unlockInterface: (password: string) => ipcRenderer.invoke(IPC.unlockInterface, password),
   onEvent: (listener: (event: DesktopEvent) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, payload: DesktopEvent) => listener(payload)
     ipcRenderer.on(IPC.event, handler)

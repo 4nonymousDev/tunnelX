@@ -9,9 +9,10 @@ import {
   type UpdateTunnelRequest,
 } from '../shared/ipc'
 import type { CoreSupervisor } from './core-supervisor'
+import type { InterfaceLockManager } from './lock-manager'
 import type { UpdateManager } from './update-manager'
 
-export function registerIpc(supervisor: CoreSupervisor, updates: UpdateManager): void {
+export function registerIpc(supervisor: CoreSupervisor, updates: UpdateManager, interfaceLock: InterfaceLockManager): void {
   ipcMain.handle(IPC.bootstrap, async () => {
     const snapshot = await supervisor.initialize()
     return { status: supervisor.getStatus(), snapshot }
@@ -59,6 +60,14 @@ export function registerIpc(supervisor: CoreSupervisor, updates: UpdateManager):
   ipcMain.handle(IPC.checkForUpdates, () => updates.checkForUpdates())
   ipcMain.handle(IPC.downloadUpdate, () => updates.downloadUpdate())
   ipcMain.handle(IPC.installUpdate, () => updates.installUpdate())
+  ipcMain.handle(IPC.getLockState, () => interfaceLock.getState())
+  ipcMain.handle(IPC.lockInterface, (_event, value: unknown) => interfaceLock.lock(lockPassword(value)))
+  ipcMain.handle(IPC.unlockInterface, (_event, value: unknown) => interfaceLock.unlock(lockPassword(value)))
+}
+
+function lockPassword(value: unknown): string {
+  if (typeof value !== 'string') throw new Error('密码格式无效')
+  return value
 }
 
 function tunnelBatch(value: unknown): TunnelConfigDTO[] {

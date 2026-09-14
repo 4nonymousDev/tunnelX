@@ -9,6 +9,7 @@
       @connect="connect"
       @disconnect="disconnect"
       @settings="settingsOpen = true"
+      @lock="emit('lock')"
       @update="updateDialogOpen = true"
     />
 
@@ -141,6 +142,8 @@ import TunnelList from './TunnelList.vue'
 import UpdateDialog from './UpdateDialog.vue'
 
 type WorkspaceTab = TunnelKind | 'logs'
+
+const emit = defineEmits<{ lock: [] }>()
 
 const {
   snapshot,

@@ -11,6 +11,7 @@ import { IPC } from '../shared/ipc'
 import type { CoreStatus, SnapshotDTO } from '../shared/dto'
 import { CoreSupervisor } from './core-supervisor'
 import { registerIpc } from './ipc'
+import { InterfaceLockManager } from './lock-manager'
 import { trayIcon, trayPresentation, type TrayState } from './tray'
 import { UpdateManager } from './update-manager'
 
@@ -36,7 +37,9 @@ if (!hasLock) {
 async function startDesktop(): Promise<void> {
   supervisor = new CoreSupervisor()
   updates = new UpdateManager(prepareUpdateInstall)
-  registerIpc(supervisor, updates)
+  const interfaceLock = new InterfaceLockManager(path.join(app.getPath('userData'), 'interface-lock.json'))
+  await interfaceLock.initialize()
+  registerIpc(supervisor, updates, interfaceLock)
   supervisor.subscribe(event => {
     if (event.type === 'snapshot') {
       latestSnapshot = event.snapshot

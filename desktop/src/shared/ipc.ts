@@ -26,8 +26,16 @@ export const IPC = {
   checkForUpdates: 'tunnelx:update:check',
   downloadUpdate: 'tunnelx:update:download',
   installUpdate: 'tunnelx:update:install',
+  getLockState: 'tunnelx:lock:get-state',
+  lockInterface: 'tunnelx:lock:lock',
+  unlockInterface: 'tunnelx:lock:unlock',
   event: 'tunnelx:event',
 } as const
+
+export interface InterfaceLockState {
+  locked: boolean
+  hasPassword: boolean
+}
 
 export type UpdatePhase =
   | 'idle'
@@ -95,5 +103,8 @@ export interface TunnelXDesktopAPI {
   checkForUpdates(): Promise<UpdateState>
   downloadUpdate(): Promise<UpdateState>
   installUpdate(): Promise<void>
+  getLockState(): Promise<InterfaceLockState>
+  lockInterface(password: string): Promise<InterfaceLockState>
+  unlockInterface(password: string): Promise<InterfaceLockState>
   onEvent(listener: (event: DesktopEvent) => void): () => void
 }

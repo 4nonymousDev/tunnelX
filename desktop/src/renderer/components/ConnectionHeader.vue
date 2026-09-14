@@ -14,6 +14,9 @@
       <span class="status-pill" :class="statusClass">
         <span class="status-dot" />{{ stateLabel }}
       </span>
+      <button class="icon-button" type="button" :disabled="busy" aria-label="锁定界面" title="锁定界面" @click="emit('lock')">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7.5 10V7.5a4.5 4.5 0 0 1 9 0V10M6 10h12v10H6V10Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>
+      </button>
       <button class="button button-secondary" type="button" :disabled="busy" @click="emit('settings')">
         设置
       </button>
@@ -50,6 +53,7 @@ const emit = defineEmits<{
   connect: []
   disconnect: []
   settings: []
+  lock: []
   update: []
 }>()
 
@@ -86,4 +90,8 @@ const subtitle = computed(() => props.serverAddress || '尚未配置服务器')
 .status-connected { color: var(--success); }
 .status-connecting, .status-retrying, .status-starting, .status-reconnecting { color: var(--warning); }
 .status-failed, .status-error { color: var(--danger); }
+.icon-button { display: grid; width: 34px; height: 34px; place-items: center; padding: 0; border: 1px solid var(--line-strong); border-radius: 9px; color: var(--text); background: rgba(255,255,255,.035); cursor: pointer; transition: filter .15s, background .15s; }
+.icon-button:hover:not(:disabled) { filter: brightness(1.15); background: rgba(255,255,255,.06); }
+.icon-button:disabled { opacity: .45; cursor: not-allowed; }
+.icon-button svg { width: 17px; height: 17px; }
 </style>
