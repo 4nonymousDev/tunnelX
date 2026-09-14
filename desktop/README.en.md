@@ -54,8 +54,10 @@ npm run build
 npm run package
 ```
 
-`npm run package` uses electron-builder and places `tunnelx-cli.exe` from the
-repository root in the package's `resources/core/` directory.
+`npm run package` uses electron-builder to create both an NSIS installer and a
+portable ZIP, placing `tunnelx-cli.exe` from the repository root in each
+package's `resources/core/` directory. Extract the portable ZIP before running
+`TunnelX.exe`; do not launch it from inside the archive.
 
 ## Auto updates and versions
 
@@ -67,7 +69,7 @@ The GUI and CLI have independent [SemVer](https://semver.org/) versions:
 - The CLI version is the root `CLI_VERSION`, injected into `tunnelx-cli.exe` by the release build.
 - GUI-only changes bump only the GUI version. CLI changes bump the CLI version and at least the GUI patch version because the desktop installer carries the CLI update.
 
-`.github/workflows/release-desktop.yml` tests, builds, and publishes unsigned NSIS artifacts on a clean Windows runner. Update the versions before pushing a tag:
+`.github/workflows/release-desktop.yml` tests, builds, and publishes the unsigned NSIS installer and portable ZIP on a clean Windows runner. Update the versions before pushing a tag:
 
 ```powershell
 npm --prefix desktop version 0.1.1 --no-git-tag-version
@@ -79,7 +81,15 @@ git push origin HEAD --tags
 
 The workflow uses GitHub's built-in `GITHUB_TOKEN`; no signing secret is currently required. Confirm that Settings → Actions → General → Workflow permissions permits writing Releases. Unsigned installers can trigger SmartScreen or Unknown Publisher warnings.
 
-Updates replace only the installation directory. Configuration, SSH keys, known_hosts, and logs remain under Electron's `userData` directory and are neither uploaded nor removed during a normal update. Changing `appId`, `productName`, or the default `userData` path requires an explicit data migration.
+The installed edition supports in-app updates. To remain installation-free,
+portable ZIP users should download each new ZIP manually, exit the old version,
+and extract it into a new empty directory. Confirming an in-app update from the
+ZIP edition launches the NSIS installer and converts it to the installed
+edition. Both editions keep configuration, SSH keys, known_hosts, and logs in
+Electron's `userData` directory rather than the program directory, so replacing
+program files does not remove them and they are never included in release
+artifacts. Changing `appId`, `productName`, or the default `userData` path
+requires an explicit data migration.
 
 ## Path overrides
 

@@ -47,7 +47,10 @@
     },
     "afterPack": "scripts/verify-package.cjs",
     "win": {
-      "target": "nsis"
+      "target": [
+        "nsis",
+        "zip"
+      ]
     },
     "publish": [
       {

@@ -38,7 +38,7 @@ npm run build
 npm run package
 ```
 
-`npm run package` 使用 electron-builder，并将仓库根目录的 `tunnelx-cli.exe` 放进安装包的 `resources/core/`。
+`npm run package` 使用 electron-builder，同时生成 NSIS 安装版和 ZIP 便携版，并将仓库根目录的 `tunnelx-cli.exe` 放进两种产物的 `resources/core/`。便携版解压后可直接运行 `TunnelX.exe`，不要在压缩包内直接启动。
 
 ## 自动更新与版本
 
@@ -50,7 +50,7 @@ GUI 与 CLI 使用独立的 [SemVer](https://semver.org/lang/zh-CN/) 版本号�
 - CLI 版本来自仓库根目录 `CLI_VERSION`，发布构建会把它注入 `tunnelx-cli.exe`。
 - 只修改 GUI 时只提升 GUI 版本；修改 CLI 时提升 CLI 版本，并至少提升 GUI 的补丁版本，因为桌面安装包是 CLI 更新的载体。
 
-仓库中的 `.github/workflows/release-desktop.yml` 负责在干净的 Windows runner 中测试、构建并发布 unsigned NSIS 产物。创建标签前先同步版本，然后推送标签：
+仓库中的 `.github/workflows/release-desktop.yml` 负责在干净的 Windows runner 中测试、构建并发布未签名的 NSIS 安装版和 ZIP 便携版。创建标签前先同步版本，然后推送标签：
 
 ```powershell
 # 示例：GUI 0.1.1，CLI 仍为 0.1.0
@@ -63,7 +63,7 @@ git push origin HEAD --tags
 
 工作流只使用 GitHub 自动提供的 `GITHUB_TOKEN`，当前未配置 Windows 代码签名。首次使用时确认仓库 `Settings → Actions → General → Workflow permissions` 允许工作流写入 Releases。未签名安装程序可能触发 Windows SmartScreen 或“未知发布者”提示。
 
-更新只替换安装目录。用户的配置、SSH 密钥、known_hosts 和日志继续保存在 Electron `userData` 目录中，不随安装包上传，也不会在正常升级时删除。不要修改 `appId`、`productName` 或默认 `userData` 路径；这些变更必须配套数据迁移。
+安装版可使用应用内自动更新。ZIP 便携版若要继续保持免安装方式，请手动下载新版 ZIP，退出旧版本后解压到新的空目录；应用内确认更新会启动 NSIS 安装程序并转为安装版。两种版本的用户配置、SSH 密钥、known_hosts 和日志都保存在 Electron `userData` 目录中，不在程序目录内，不随发布包上传，也不会因为替换程序文件而删除。不要修改 `appId`、`productName` 或默认 `userData` 路径；这些变更必须配套数据迁移。
 
 ## 路径覆盖
 
