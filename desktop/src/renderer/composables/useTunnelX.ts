@@ -94,6 +94,12 @@ export function useTunnelX() {
     return result
   }
 
+  async function selectKeyDirectory(keyPath: string): Promise<string | undefined> {
+    let selectedPath: string | undefined
+    await execute(async () => { selectedPath = await bridge().selectKeyDirectory(keyPath) })
+    return selectedPath
+  }
+
   async function copyText(text: string): Promise<void> {
     await execute(() => bridge().copyText(text))
   }
@@ -155,6 +161,7 @@ export function useTunnelX() {
     updateTunnel,
     deleteTunnel,
     updateSettings,
+    selectKeyDirectory,
     generateKey,
     copyText,
     confirm,

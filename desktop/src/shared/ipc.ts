@@ -18,6 +18,7 @@ export const IPC = {
   updateTunnel: 'tunnelx:tunnel:update',
   deleteTunnel: 'tunnelx:tunnel:delete',
   updateSettings: 'tunnelx:settings:update',
+  selectKeyDirectory: 'tunnelx:key:select-directory',
   generateKey: 'tunnelx:key:generate',
   copyText: 'tunnelx:clipboard:write',
   confirm: 'tunnelx:confirm',
@@ -55,6 +56,7 @@ export interface TunnelXDesktopAPI {
   updateTunnel(id: string, tunnel: TunnelConfigDTO): Promise<SnapshotDTO>
   deleteTunnel(id: string): Promise<SnapshotDTO>
   updateSettings(settings: SettingsDTO): Promise<SnapshotDTO>
+  selectKeyDirectory(keyPath: string): Promise<string | undefined>
   generateKey(request: KeyGenerationRequestDTO): Promise<KeyGenerationResultDTO>
   copyText(text: string): Promise<void>
   confirm(id: number, accept: boolean): Promise<SnapshotDTO>

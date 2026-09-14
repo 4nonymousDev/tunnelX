@@ -42,12 +42,14 @@
 
       <LogPanel
         v-if="activeTab === 'logs'"
+        class="workspace-content"
         :logs="logs"
         :diagnostics-copied="diagnosticsCopied"
         @copy-diagnostics="copyDiagnostics"
       />
       <TunnelList
         v-else
+        class="workspace-content"
         :kind="activeTab"
         :tunnels="visibleTunnels"
         @add="openNewTunnel"
@@ -79,6 +81,7 @@
       :open="settingsOpen"
       :snapshot="snapshot"
       :busy="busy"
+      :key-path-override="keyGenerationResult?.key_path"
       @close="settingsOpen = false"
       @save="saveSettings"
       @generate="openKeyGenerator"
@@ -89,6 +92,7 @@
       :busy="busy"
       :result="keyGenerationResult"
       @close="closeKeyGenerator"
+      @browse="browseKeyDirectory"
       @submit="submitKeyGeneration"
       @copy="copyText"
     />
@@ -144,6 +148,7 @@ const {
   updateTunnel,
   deleteTunnel,
   updateSettings,
+  selectKeyDirectory,
   generateKey,
   copyText,
   confirm,
@@ -240,8 +245,14 @@ function closeKeyGenerator(): void {
   keyGenerationResult.value = undefined
 }
 
+async function browseKeyDirectory(currentPath: string): Promise<void> {
+  const selectedPath = await selectKeyDirectory(currentPath)
+  if (selectedPath) keyGenerationPath.value = selectedPath
+}
+
 async function submitKeyGeneration(request: KeyGenerationRequestDTO): Promise<void> {
   keyGenerationResult.value = await generateKey(request)
+  if (keyGenerationResult.value) keyGenerationPath.value = keyGenerationResult.value.key_path
 }
 
 async function copyDiagnostics(): Promise<void> {
@@ -274,15 +285,16 @@ async function answerConfirmation(accept: boolean): Promise<void> {
 </script>
 
 <style scoped>
-.app-shell { min-height: 100vh; }
-.workspace { width: min(980px, calc(100% - 56px)); margin: 0 auto; padding: 34px 0 48px; }
+.app-shell { display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 0; overflow: hidden; }
+.workspace { display: flex; flex: 1 1 auto; flex-direction: column; width: min(980px, calc(100% - 56px)); min-height: 0; margin: 0 auto; padding: 34px 0 24px; overflow: hidden; }
+.workspace-content { flex: 1 1 auto; min-height: 0; }
 .error-banner { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; padding: 12px 15px; border: 1px solid rgba(255,104,117,.25); border-radius: 12px; color: #ffb0b8; font-size: 12px; background: rgba(255,104,117,.08); }
 .error-banner button { border: 0; color: inherit; font-size: 20px; background: transparent; cursor: pointer; }
-.summary-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; }
+.summary-row { display: flex; flex: 0 0 auto; align-items: flex-end; justify-content: space-between; gap: 24px; }
 .eyebrow { margin: 0 0 7px; color: var(--accent-light); font-size: 10px; font-weight: 800; letter-spacing: .15em; }
 .workspace-title { margin: 0; font-size: 24px; letter-spacing: -.03em; }
 .workspace-copy { margin: 7px 0 0; color: var(--muted); font-size: 12px; }
-.tabs { display: flex; gap: 5px; margin: 28px 0 15px; padding: 4px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,255,255,.025); }
+.tabs { display: flex; flex: 0 0 auto; gap: 5px; margin: 28px 0 15px; padding: 4px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,255,255,.025); }
 .tab { padding: 8px 13px; border: 0; border-radius: 8px; color: var(--muted); font: inherit; font-size: 12px; background: transparent; cursor: pointer; }
 .tab:hover { color: var(--text); }
 .tab.active { color: white; background: #29334b; box-shadow: 0 2px 9px rgba(0,0,0,.2); }

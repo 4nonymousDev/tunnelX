@@ -47,11 +47,11 @@ function formatTime(value: string): string {
 </script>
 
 <style scoped>
-.log-panel { overflow: hidden; border: 1px solid var(--line); border-radius: 16px; background: #070b14; }
+.log-panel { display: flex; flex-direction: column; min-height: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 16px; background: #070b14; }
 .log-toolbar { display: flex; justify-content: space-between; padding: 11px 14px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 11px; }
 .toolbar-actions { display: flex; gap: 14px; }
 .text-button { border: 0; color: var(--accent-light); font: inherit; background: transparent; cursor: pointer; }
-.log-output { height: 410px; overflow: auto; padding: 12px 14px; font: 11px/1.7 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.log-output { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 12px 14px; font: 11px/1.7 ui-monospace, SFMono-Regular, Consolas, monospace; }
 .log-line { display: grid; grid-template-columns: 74px 44px minmax(75px, auto) 1fr; gap: 8px; }
 .log-time, .log-source { color: #657087; }
 .log-level { color: #9aa5bb; }

@@ -66,6 +66,12 @@ function createWindow(): void {
     title: 'TunnelX',
     backgroundColor: '#0b1020',
     autoHideMenuBar: true,
+    titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      color: '#0c1223',
+      symbolColor: '#cdd5e8',
+      height: 64,
+    },
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload', 'index.js'),
       contextIsolation: true,

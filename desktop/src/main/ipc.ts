@@ -1,4 +1,6 @@
-import { clipboard, ipcMain } from 'electron'
+import path from 'node:path'
+
+import { clipboard, dialog, ipcMain } from 'electron'
 
 import type { KeyGenerationRequestDTO, SettingsDTO, TunnelConfigDTO } from '../shared/dto'
 import {
@@ -26,6 +28,21 @@ export function registerIpc(supervisor: CoreSupervisor): void {
     return supervisor.deleteTunnel(text(value, '隧道 ID'))
   })
   ipcMain.handle(IPC.updateSettings, (_event, value: unknown) => supervisor.updateSettings(settings(value)))
+  ipcMain.handle(IPC.selectKeyDirectory, async (_event, value: unknown) => {
+    if (typeof value !== 'string') throw new Error('私钥路径无效')
+    const currentKeyPath = value.trim()
+    const defaultPath = currentKeyPath && path.isAbsolute(currentKeyPath)
+      ? path.dirname(currentKeyPath)
+      : undefined
+    const fileName = currentKeyPath ? path.basename(currentKeyPath) : 'tunnel_key'
+    const result = await dialog.showOpenDialog({
+      title: '选择 SSH Key 生成目录',
+      defaultPath,
+      properties: ['openDirectory', 'createDirectory'],
+    })
+    if (result.canceled || !result.filePaths[0]) return undefined
+    return path.join(result.filePaths[0], fileName || 'tunnel_key')
+  })
   ipcMain.handle(IPC.generateKey, (_event, value: unknown) => supervisor.generateKey(keyGeneration(value)))
   ipcMain.handle(IPC.copyText, (_event, value: unknown) => {
     if (typeof value !== 'string' || value.length > 1_000_000) throw new Error('诊断文本无效或过大')

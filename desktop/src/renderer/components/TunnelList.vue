@@ -41,8 +41,9 @@ const addLabel = computed(() => props.kind === 'export' ? '添加第一条' : '�
 </script>
 
 <style scoped>
+.tunnel-list { min-height: 0; overflow-x: hidden; overflow-y: auto; padding-right: 6px; scrollbar-gutter: stable; }
 .cards { display: grid; gap: 10px; }
-.empty-state { display: grid; justify-items: center; min-height: 310px; align-content: center; padding: 36px; border: 1px dashed var(--line-strong); border-radius: 18px; text-align: center; background: rgba(255,255,255,.015); }
+.empty-state { display: grid; justify-items: center; height: 100%; min-height: 260px; align-content: center; padding: 36px; border: 1px dashed var(--line-strong); border-radius: 18px; text-align: center; background: rgba(255,255,255,.015); }
 .empty-symbol { display: grid; place-items: center; width: 52px; height: 52px; border-radius: 16px; color: var(--accent-light); font-size: 26px; background: rgba(91,124,250,.12); }
 .empty-title { margin: 16px 0 0; font-size: 16px; }
 .empty-copy { max-width: 380px; margin: 8px 0 20px; color: var(--muted); font-size: 13px; line-height: 1.6; }

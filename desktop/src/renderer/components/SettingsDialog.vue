@@ -21,7 +21,7 @@
           <span class="field-label">私钥路径</span>
           <span class="key-path-row">
             <input v-model.trim="form.key_path" class="input" placeholder="D:\keys\tunnel_key" required />
-            <button class="button button-secondary" type="button" :disabled="busy || !form.key_path" @click="emit('generate', form.key_path)">生成</button>
+            <button class="button button-secondary" type="button" :disabled="busy" @click="emit('generate', form.key_path)">生成</button>
           </span>
         </label>
       </div>
@@ -39,7 +39,12 @@ import { reactive, watch } from 'vue'
 
 import type { SettingsDTO, SnapshotDTO } from '@shared/dto'
 
-const props = defineProps<{ open: boolean; snapshot?: SnapshotDTO; busy: boolean }>()
+const props = defineProps<{
+  open: boolean
+  snapshot?: SnapshotDTO
+  busy: boolean
+  keyPathOverride?: string
+}>()
 const emit = defineEmits<{ close: []; save: [settings: SettingsDTO]; generate: [keyPath: string] }>()
 const form = reactive<SettingsDTO>({ name: '', server_addr: '', key_path: '' })
 
@@ -54,6 +59,13 @@ watch(
     })
   },
   { immediate: true },
+)
+
+watch(
+  () => props.keyPathOverride,
+  (keyPath) => {
+    if (props.open && keyPath) form.key_path = keyPath
+  },
 )
 
 function submit(): void {

@@ -67,12 +67,12 @@ const subtitle = computed(() => props.serverAddress || '尚未配置服务器')
 </script>
 
 <style scoped>
-.connection-header { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 22px 28px; border-bottom: 1px solid var(--line); background: rgba(12, 18, 35, .86); backdrop-filter: blur(20px); }
+.connection-header { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; min-height: 64px; gap: 20px; padding: 10px 150px 10px 20px; border-bottom: 1px solid var(--line); background: #0c1223; user-select: none; -webkit-app-region: drag; }
 .brand { display: flex; align-items: center; gap: 13px; min-width: 0; }
 .brand-mark { display: grid; place-items: center; width: 42px; height: 42px; flex: 0 0 auto; border-radius: 13px; color: white; font-size: 13px; font-weight: 800; letter-spacing: -.04em; background: linear-gradient(145deg, #6f8cff, #4a62dc); box-shadow: 0 8px 30px rgba(91, 124, 250, .35); }
 .brand-title { margin: 0; font-size: 18px; letter-spacing: -.02em; }
 .brand-subtitle { margin: 3px 0 0; overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.header-actions { display: flex; align-items: center; gap: 10px; }
+.header-actions { display: flex; align-items: center; gap: 10px; -webkit-app-region: no-drag; }
 .status-pill { display: inline-flex; align-items: center; gap: 8px; margin-right: 4px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 12px; }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; box-shadow: 0 0 12px currentColor; }
 .status-connected { color: var(--success); }
