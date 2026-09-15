@@ -11,6 +11,7 @@
     "build:renderer": "vite build",
     "build:electron": "tsc -p tsconfig.electron.json",
     "verify:preload": "node scripts/verify-preload.mjs",
+    "verify:release-notes": "node scripts/verify-release-notes.mjs",
     "build": "npm run typecheck && npm run build:renderer && npm run build:electron && npm run verify:preload",
     "package": "npm run build && electron-builder"
   },

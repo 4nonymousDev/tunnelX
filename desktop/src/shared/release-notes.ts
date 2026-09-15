@@ -15,14 +15,18 @@ const NAMED_ENTITIES: Record<string, string> = {
 }
 
 export function releaseNoteAsPlainText(value: string): string {
-  return decodeEntities(value
+  // GitHub's feed can encode the release HTML as entities. Decode before
+  // stripping markup so the decoded tags do not leak into the dialog.
+  return decodeEntities(value)
     .replace(/\r\n?/g, '\n')
+    .replace(/\\(?=<\/?[a-z][^>]*>)/gi, '')
     .replace(SCRIPT_OR_STYLE, '')
     .replace(LINE_BREAK_TAG, '\n')
     .replace(LIST_ITEM_TAG, '• ')
     .replace(BLOCK_END_TAG, '\n')
     .replace(BLOCK_START_TAG, '')
-    .replace(REMAINING_TAG, ''))
+    .replace(REMAINING_TAG, '')
+    .replace(/•[ \t]+/g, '• ')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n[ \t]+/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
