@@ -1,16 +1,106 @@
 package manager
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"tunnelx/internal/config"
 	"tunnelx/internal/logbuf"
+	"tunnelx/internal/tunnel"
 )
+
+type onlineImportResolver struct{}
+
+func (onlineImportResolver) ResolveRemotePort(string, string, int) (int, bool) { return 80, true }
+func (onlineImportResolver) DescribeRegistry() []string                        { return nil }
+
+func startListeningImport(t *testing.T, item *tunnel.Tunnel) {
+	t.Helper()
+	// No traffic is sent: only the real local listener lifecycle is exercised.
+	item.Start(context.Background(), nil, onlineImportResolver{}, nil)
+	t.Cleanup(item.Stop)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if item.Status().State == tunnel.StateRunning {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("import did not start: %+v", item.Status())
+}
+
+func TestRunningImportDisableEnableReleasesPort(t *testing.T) {
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+	m, path := newTestManager(t, config.Tunnel{
+		Kind: config.KindImport, Enabled: true, PeerID: "peer", PeerSrcPort: 80, ListenPort: port,
+	})
+	for cycle := 0; cycle < 3; cycle++ {
+		startListeningImport(t, m.Tunnels()[0])
+		cfg := m.Tunnels()[0].Config()
+		cfg.Enabled = false
+		if err := m.UpdateTunnel(0, cfg); err != nil {
+			t.Fatalf("disable: %v", err)
+		}
+		if readTunnels(t, path)[0].Enabled {
+			t.Fatal("disable not persisted")
+		}
+		if err := tunnel.CheckListenPort(port); err != nil {
+			t.Fatalf("listener leaked: %v", err)
+		}
+		cfg.Enabled = true
+		if err := m.UpdateTunnel(0, cfg); err != nil {
+			t.Fatalf("enable: %v", err)
+		}
+		if !readTunnels(t, path)[0].Enabled {
+			t.Fatal("enable not persisted")
+		}
+	}
+	startListeningImport(t, m.Tunnels()[0])
+	cfg := m.Tunnels()[0].Config()
+	cfg.Name = "renamed"
+	if err := m.UpdateTunnel(0, cfg); err != nil {
+		t.Fatalf("rename running import: %v", err)
+	}
+}
+
+func TestEnableImportRejectsOccupiedPort(t *testing.T) {
+	blocker, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Close()
+	port := blocker.Addr().(*net.TCPAddr).Port
+	blocker6, err := net.Listen("tcp6", net.JoinHostPort("::1", fmt.Sprint(port)))
+	if err == nil {
+		defer blocker6.Close()
+	}
+	m, path := newTestManager(t, config.Tunnel{
+		Kind: config.KindImport, PeerID: "peer", PeerSrcPort: 80, ListenPort: port,
+	})
+	cfg := m.Tunnels()[0].Config()
+	if err := m.UpdateTunnel(0, cfg); err != nil {
+		t.Fatalf("disabled import requires no free port: %v", err)
+	}
+	cfg.Enabled = true
+	if err := m.UpdateTunnel(0, cfg); err == nil {
+		t.Fatal("occupied port accepted")
+	}
+	if m.Tunnels()[0].Config().Enabled || readTunnels(t, path)[0].Enabled {
+		t.Fatal("failed enable changed configuration")
+	}
+}
 
 // newTestManager 构造一个未连接的 Manager，配置写入临时目录。
 // newTestManager constructs a disconnected Manager whose configuration is written to a temporary directory.

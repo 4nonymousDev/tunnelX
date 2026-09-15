@@ -188,6 +188,18 @@ func (m *Manager) UpdateTunnel(i int, tc config.Tunnel) error {
 	// 先停旧的，释放其占用的本地端口——否则新配置若沿用同一端口会绑定失败。
 	// Stop the old tunnel first to release its local port before rebinding the same port.
 	old.Stop()
+	// Probe only after our listener has closed. Disabling needs no free port.
+	if tc.Kind == config.KindImport && tc.Enabled {
+		if err := tunnel.CheckListenPort(tc.ListenPort); err != nil {
+			m.mu.RLock()
+			ctx, conn, ctrl := m.runCtx, m.conn, m.ctrl
+			m.mu.RUnlock()
+			if oldConfig.Enabled && ctx != nil && conn != nil && ctrl != nil {
+				old.Start(ctx, conn.Client(), ctrl, ctrl)
+			}
+			return err
+		}
+	}
 
 	t := tunnel.New(tc, m.log, m.onTunnelChange)
 
@@ -269,7 +281,8 @@ func (m *Manager) validate(tc config.Tunnel, skip int) error {
 	existing := append([]config.Tunnel(nil), m.cfg.Tunnels...)
 	m.mu.RUnlock()
 
-	return validateAgainst(existing, tc, skip)
+	// Updates probe after stopping the old tunnel; additions probe immediately.
+	return validateConfigAgainst(existing, tc, skip, skip < 0)
 }
 
 // ConnStatus 返回连接层状态快照。

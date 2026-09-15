@@ -197,6 +197,10 @@ func tunnelDesc(tc config.Tunnel) string {
 // a supplied tunnel set. This lets AddTunnels validate against existing plus accepted
 // batch entries, while validate holds RLock and sees only committed tunnels.
 func validateAgainst(existing []config.Tunnel, tc config.Tunnel, skip int) error {
+	return validateConfigAgainst(existing, tc, skip, true)
+}
+
+func validateConfigAgainst(existing []config.Tunnel, tc config.Tunnel, skip int, probe bool) error {
 	for i, ex := range existing {
 		if i != skip && tc.ID != "" && ex.ID == tc.ID {
 			return fmt.Errorf("隧道标识与「%s」重复", tunnelDesc(ex))
@@ -229,8 +233,10 @@ func validateAgainst(existing []config.Tunnel, tc config.Tunnel, skip int) error
 		// 用户刚点完"确定"、以为一切正常。
 		// Probe-bind once so system reservations or another process's ownership are
 		// reported here instead of surfacing only in logs after the user clicks OK.
-		if err := tunnel.CheckListenPort(tc.ListenPort); err != nil {
-			return err
+		if probe && tc.Enabled {
+			if err := tunnel.CheckListenPort(tc.ListenPort); err != nil {
+				return err
+			}
 		}
 	default:
 		return fmt.Errorf("未知的隧道类型: %s", tc.Kind)

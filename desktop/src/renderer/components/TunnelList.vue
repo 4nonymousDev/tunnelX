@@ -1,14 +1,23 @@
 <template>
   <section class="tunnel-list">
-    <div v-if="tunnels.length" class="cards">
-      <TunnelCard
-        v-for="tunnel in tunnels"
-        :key="tunnel.config.id"
-        :tunnel="tunnel"
-        @edit="emit('edit', $event)"
-        @delete="emit('delete', $event)"
-        @toggle="emit('toggle', $event)"
-      />
+    <div v-if="tunnels.length" class="groups">
+      <section v-for="group in groups" :key="group.id" class="cards">
+        <header v-if="kind === 'import'" class="peer-heading">
+          <div class="peer-identity">
+            <h2 class="peer-name">{{ group.name }}</h2>
+            <span v-if="group.name !== group.id" class="peer-id">{{ group.id }}</span>
+          </div>
+          <span class="peer-count">{{ group.tunnels.length }} 条隧道</span>
+        </header>
+        <TunnelCard
+          v-for="tunnel in group.tunnels"
+          :key="tunnel.config.id"
+          :tunnel="tunnel"
+          @edit="emit('edit', $event)"
+          @delete="emit('delete', $event)"
+          @toggle="emit('toggle', $event)"
+        />
+      </section>
     </div>
     <div v-else class="empty-state">
       <div class="empty-symbol">{{ kind === 'export' ? '↑' : '↓' }}</div>
@@ -34,6 +43,23 @@ const emit = defineEmits<{
 }>()
 
 const kindLabel = computed(() => props.kind === 'export' ? '导出' : '导入')
+const groups = computed(() => {
+  if (props.kind === 'export') return [{ id: 'export', name: '', tunnels: props.tunnels }]
+  const peers = new Map<string, { id: string; name: string; tunnels: TunnelDTO[] }>()
+  for (const tunnel of props.tunnels) {
+    const id = tunnel.config.peer_id || ''
+    const name = tunnel.config.peer_name?.trim()
+    let group = peers.get(id)
+    if (!group) {
+      group = { id, name: name || id || '未知对端', tunnels: [] }
+      peers.set(id, group)
+    } else if (name && group.name === id) {
+      group.name = name
+    }
+    group.tunnels.push(tunnel)
+  }
+  return [...peers.values()]
+})
 const emptyCopy = computed(() => props.kind === 'export'
   ? '把本机或局域网服务安全地发布到 TunnelX 服务端。'
   : '选择另一台设备发布的服务，并映射到本机端口。')
@@ -43,6 +69,12 @@ const addLabel = computed(() => props.kind === 'export' ? '添加第一条' : '�
 <style scoped>
 .tunnel-list { min-height: 0; overflow-x: hidden; overflow-y: auto; padding-right: 6px; scrollbar-gutter: stable; }
 .cards { display: grid; gap: 10px; }
+.groups { display: grid; gap: 22px; }
+.peer-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 4px 2px; }
+.peer-identity { min-width: 0; }
+.peer-name { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
+.peer-id { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.peer-count { flex-shrink: 0; color: var(--muted); font-size: 12px; }
 .empty-state { display: grid; justify-items: center; height: 100%; min-height: 260px; align-content: center; padding: 36px; border: 1px dashed var(--line-strong); border-radius: 18px; text-align: center; background: rgba(255,255,255,.015); }
 .empty-symbol { display: grid; place-items: center; width: 52px; height: 52px; border-radius: 16px; color: var(--accent-light); font-size: 26px; background: rgba(91,124,250,.12); }
 .empty-title { margin: 16px 0 0; font-size: 16px; }
