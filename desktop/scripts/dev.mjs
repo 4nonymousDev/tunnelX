@@ -1,17 +1,20 @@
 import { spawn } from 'node:child_process'
+import { createRequire } from 'node:module'
 import path from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 
-const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm'
-const electronCommand = process.platform === 'win32'
-  ? 'node_modules\\.bin\\electron.cmd'
-  : 'node_modules/.bin/electron'
+const require = createRequire(import.meta.url)
+const desktopRoot = fileURLToPath(new URL('..', import.meta.url))
+// Launch the actual entry points: Windows cannot spawn .cmd shims directly.
+const typescriptCli = require.resolve('typescript/bin/tsc')
+const viteCli = path.join(path.dirname(require.resolve('vite/package.json')), 'bin/vite.js')
+const electronCommand = require('electron')
 const projectRoot = fileURLToPath(new URL('../..', import.meta.url))
 const corePath = path.join(projectRoot, 'tunnelx-cli.exe')
 
 function run(command, args, options = {}) {
-  return spawn(command, args, { stdio: 'inherit', ...options })
+  return spawn(command, args, { cwd: desktopRoot, stdio: 'inherit', ...options })
 }
 
 async function requireSuccess(child, label) {
@@ -30,10 +33,10 @@ const coreCompiler = run('go', [
 ], { cwd: projectRoot })
 await requireSuccess(coreCompiler, 'TunnelX 核心编译')
 
-const compiler = run(npmCommand, ['run', 'build:electron'])
+const compiler = run(process.execPath, [typescriptCli, '-p', 'tsconfig.electron.json'])
 await requireSuccess(compiler, 'Electron 主进程编译')
 
-const vite = run(npmCommand, ['run', 'dev:renderer'])
+const vite = run(process.execPath, [viteCli])
 
 let ready = false
 for (let attempt = 0; attempt < 60; attempt += 1) {
