@@ -57,6 +57,7 @@ audit.jsonl
 # ---- 本地资料（不公开）----
 # ---- Local material (not published) ----
 /docs/
+/AGENTS.md
 
 # ---- Go ----
 # ---- Go ----

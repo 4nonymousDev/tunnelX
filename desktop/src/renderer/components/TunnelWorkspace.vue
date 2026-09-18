@@ -3,7 +3,6 @@
     <ConnectionHeader
       :connection="connection"
       :core-status="status"
-      :server-address="snapshot?.server_addr"
       :busy="busy"
       :update-available="updateAvailable"
       @connect="connect"
