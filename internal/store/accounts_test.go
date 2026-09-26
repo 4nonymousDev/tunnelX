@@ -257,7 +257,7 @@ func TestAccountMigrationPreservesV3AndCreatesConsistentBackup(t *testing.T) {
 	if err = s.Block(ctx, BlockRequest{Entry: BlacklistEntry{Fingerprint: fp, Reason: "keep"}}); err != nil {
 		t.Fatal(err)
 	}
-	for _, q := range []string{`DROP TABLE account_devices`, `DROP TABLE accounts`, `PRAGMA user_version=3`} {
+	for _, q := range []string{`DROP TABLE client_update_policy`, `DROP TABLE account_devices`, `DROP TABLE accounts`, `PRAGMA user_version=3`} {
 		if _, err = s.db.Exec(q); err != nil {
 			t.Fatal(err)
 		}

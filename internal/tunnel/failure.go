@@ -174,6 +174,8 @@ func portFromAddr(a net.Addr) int {
 
 func serverReason(e *proto.Error) string {
 	switch e.Code {
+	case proto.CodeUpdateRequired:
+		return e.Msg
 	case proto.CodeVersionMismatch:
 		return "协议版本不兼容，请升级客户端"
 	case proto.CodeDuplicateID:

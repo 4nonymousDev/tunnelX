@@ -20,6 +20,8 @@ import type {
   CreateAccountRequestDto,
   UpdateAccountRequestDto,
   AdminSessionDto,
+  ClientUpdatePolicyDto,
+  UpdatePolicyRequestDto,
 } from '../types/admin'
 
 const API_ROOT = '/api/v1'
@@ -86,6 +88,7 @@ export function useAdminApi() {
       }
       if (!response.ok) {
         if (response.status === 503) throw new Error('服务器繁忙，请稍后重试')
+        if (response.status === 409 && path === '/client-update-policy') throw new Error('更新策略已被修改，请刷新后重新填写')
         if (response.status === 409 && path.startsWith('/accounts/')) throw new Error('操作冲突：请刷新账号后重试，并确保至少保留一名启用的管理员')
         if (response.status === 409 && path === '/accounts') throw new Error('用户名已存在，请使用其他用户名或管理现有账号')
         if (response.status === 409 && path === '/clients/import-key') {
@@ -120,6 +123,10 @@ export function useAdminApi() {
   async function loadSessions() { await loadValue('/sessions', value => { sessions.value = listPage<SessionDto>(value).items }) }
   async function loadClients() { await loadValue('/clients', value => { clients.value = listPage<ClientDto>(value).items }) }
   async function loadAccounts() { await loadValue('/accounts', value => { accounts.value = listPage<AccountDto>(value).items }) }
+  async function getClientUpdatePolicy() { return request<ClientUpdatePolicyDto>('/client-update-policy') }
+  async function setClientUpdatePolicy(payload: UpdatePolicyRequestDto) {
+    return execute(() => request<ClientUpdatePolicyDto>('/client-update-policy', { method: 'PUT', body: JSON.stringify(payload) }))
+  }
   async function loadAccountDevices(username: string): Promise<AccountDeviceDto[]> {
     return listPage<AccountDeviceDto>(await request(`/accounts/${encodeURIComponent(username)}/devices`)).items
   }
@@ -420,6 +427,7 @@ export function useAdminApi() {
     identities: readonly(identities), identityClaims: readonly(identityClaims), operations: readonly(operations),
     loadGovernance, findIdentity, bindIdentity, revokeIdentity, reconcileOperation,
     accounts: readonly(accounts), loadAccounts, loadAccountDevices, createAccount, updateAccount,
+    getClientUpdatePolicy, setClientUpdatePolicy,
   }
 }
 

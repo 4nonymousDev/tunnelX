@@ -12,7 +12,7 @@
   </main>
   <div v-else class="app-shell">
     <aside class="sidebar"><div class="brand"><span class="brand-mark small">TX</span><div><strong>TunnelX</strong><small>Server Console</small></div></div><nav class="nav"><button v-for="item in navItems" :key="item.id" type="button" :class="{ active: page === item.id }" @click="navigate(item.id)">{{ item.label }}</button></nav><div class="sidebar-footer"><span class="connection"><i :class="{ connected: api.eventsConnected.value }"></i>{{ api.eventsConnected.value ? '实时更新已连接' : '实时更新重连中' }}</span><span class="current-user">{{ api.username.value }}</span><button class="logout" type="button" :disabled="api.authBusy.value" @click="logout">{{ api.authBusy.value ? '退出中…' : '退出登录' }}</button></div></aside>
-    <section class="content"><div v-if="api.error.value" class="error-banner global">{{ api.error.value }}</div><OverviewView v-if="page === 'overview'" :api="api" /><AccountsView v-else-if="page === 'accounts'" :api="api" /><SessionsView v-else-if="page === 'sessions'" :api="api" /><ClientsView v-else-if="page === 'clients'" :api="api" @select="showClient" @accounts="navigate('accounts')" /><AuditView v-else-if="page === 'audit'" :api="api" /><ClientDetailView v-else-if="page === 'client-detail' && selectedFingerprint" :api="api" :fingerprint="selectedFingerprint" @back="navigate('clients')" /></section>
+    <section class="content"><div v-if="api.error.value" class="error-banner global">{{ api.error.value }}</div><OverviewView v-if="page === 'overview'" :api="api" /><AccountsView v-else-if="page === 'accounts'" :api="api" /><SessionsView v-else-if="page === 'sessions'" :api="api" /><ClientsView v-else-if="page === 'clients'" :api="api" @select="showClient" @accounts="navigate('accounts')" /><UpdatesView v-else-if="page === 'updates'" :api="api" /><AuditView v-else-if="page === 'audit'" :api="api" /><ClientDetailView v-else-if="page === 'client-detail' && selectedFingerprint" :api="api" :fingerprint="selectedFingerprint" @back="navigate('clients')" /></section>
   </div>
 </template>
 
@@ -21,18 +21,19 @@ import { onMounted, onUnmounted, shallowRef, watch } from 'vue'
 import { useAdminApi } from './composables/useAdminApi'
 import AuditView from './views/AuditView.vue'
 import AccountsView from './views/AccountsView.vue'
+import UpdatesView from './views/UpdatesView.vue'
 import ClientDetailView from './views/ClientDetailView.vue'
 import ClientsView from './views/ClientsView.vue'
 import OverviewView from './views/OverviewView.vue'
 import SessionsView from './views/SessionsView.vue'
 
-type Page = 'overview' | 'accounts' | 'sessions' | 'clients' | 'audit' | 'client-detail'
+type Page = 'overview' | 'accounts' | 'sessions' | 'clients' | 'audit' | 'updates' | 'client-detail'
 const api = useAdminApi()
 const usernameInput = shallowRef('')
 const passwordInput = shallowRef('')
 const page = shallowRef<Page>('overview')
 const selectedFingerprint = shallowRef('')
-const navItems: Array<{ id: Exclude<Page, 'client-detail'>; label: string }> = [{ id: 'overview', label: '概览' }, { id: 'accounts', label: '账号管理' }, { id: 'sessions', label: '在线会话' }, { id: 'clients', label: '设备与高级管理' }, { id: 'audit', label: '审计日志' }]
+const navItems: Array<{ id: Exclude<Page, 'client-detail'>; label: string }> = [{ id: 'overview', label: '概览' }, { id: 'accounts', label: '账号管理' }, { id: 'sessions', label: '在线会话' }, { id: 'clients', label: '设备与高级管理' }, { id: 'updates', label: '客户端更新' }, { id: 'audit', label: '审计日志' }]
 onMounted(() => { void api.restoreSession() })
 onUnmounted(() => { passwordInput.value = '' })
 watch(api.authenticated, value => { if (!value) { page.value = 'overview'; selectedFingerprint.value = ''; passwordInput.value = '' } })

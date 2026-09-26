@@ -9,6 +9,8 @@
         <button v-if="canClose" class="dialog-close" type="button" aria-label="关闭" @click="emit('close')">×</button>
       </div>
 
+      <div v-if="requirement" class="requirement" role="status"><strong>{{ requirement.blocked ? '服务端要求更新后再连接' : '本次为有期限的必要更新' }}</strong><p>请升级到 {{ requirement.minimum_version }} 或更高版本。截止时间：{{ new Date(requirement.enforce_after).toLocaleString() }}。</p><p v-if="requirement.message">{{ requirement.message }}</p><p>若这里没有可用更新，请向管理员获取对应版本安装包。安装时保留原数据目录，密钥与配置无需重建。</p></div>
+
       <template v-if="state.phase === 'available'">
         <p class="description">TunnelX {{ state.latestGuiVersion }} 已发布，是否现在下载并安装？安装完成后应用会自动重新启动。</p>
         <div class="version-grid">
@@ -57,10 +59,12 @@
 import { computed } from 'vue'
 
 import type { UpdateState } from '@shared/ipc'
+import type { ClientUpdatePolicyDTO } from '@shared/dto'
 
 const props = defineProps<{
   open: boolean
   state: UpdateState
+  requirement?: ClientUpdatePolicyDTO
 }>()
 
 const emit = defineEmits<{
@@ -109,6 +113,8 @@ function formatBytes(value: number | undefined): string {
 </script>
 
 <style scoped>
+.dialog { max-height: calc(100vh - 48px); overflow: auto; }.requirement p { max-height: 120px; overflow: auto; }
+.requirement { padding: 12px 14px; margin-bottom: 18px; border: 1px solid #bc943f66; border-radius: 10px; color: #e9cb83; background: #bc943f10; font-size: 12px; line-height: 1.65; }.requirement p { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .dialog-backdrop { position: fixed; z-index: 80; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(2, 5, 13, .76); backdrop-filter: blur(8px); }
 .dialog { width: min(540px, 100%); padding: 24px; border: 1px solid var(--line-strong); border-radius: 20px; background: #11182a; box-shadow: 0 28px 90px rgba(0,0,0,.55); }
 .dialog-heading { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 20px; }

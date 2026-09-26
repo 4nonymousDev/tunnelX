@@ -17,6 +17,7 @@ import (
 	"tunnelx/internal/proto"
 	"tunnelx/internal/sshconn"
 	"tunnelx/internal/tunnel"
+	"tunnelx/internal/updatepolicy"
 )
 
 // ConfirmationHandler owns all interactions that cannot be decided by a daemon.
@@ -64,13 +65,14 @@ type TunnelSnapshot struct {
 }
 
 type Snapshot struct {
-	Version    string
-	Config     config.Config
-	Connection manager.ConnStatus
-	Tunnels    []TunnelSnapshot
-	Registry   []proto.RegistryEntry
-	Logs       []logbuf.Entry
-	Pending    []Confirmation
+	UpdatePolicy *updatepolicy.Status
+	Version      string
+	Config       config.Config
+	Connection   manager.ConnStatus
+	Tunnels      []TunnelSnapshot
+	Registry     []proto.RegistryEntry
+	Logs         []logbuf.Entry
+	Pending      []Confirmation
 }
 
 type Options struct {
@@ -194,11 +196,12 @@ func (s *Service) Snapshot(minLogLevel logbuf.Level) Snapshot {
 
 func (s *Service) snapshotLocked(minLogLevel logbuf.Level) Snapshot {
 	snap := Snapshot{
-		Version:    s.version,
-		Config:     cloneConfig(s.cfg),
-		Connection: s.mgr.ConnStatus(),
-		Registry:   s.mgr.Registry(),
-		Logs:       s.log.Snapshot(minLogLevel),
+		UpdatePolicy: s.mgr.UpdatePolicy(),
+		Version:      s.version,
+		Config:       cloneConfig(s.cfg),
+		Connection:   s.mgr.ConnStatus(),
+		Registry:     s.mgr.Registry(),
+		Logs:         s.log.Snapshot(minLogLevel),
 	}
 	for i, t := range s.mgr.Tunnels() {
 		snap.Tunnels = append(snap.Tunnels, TunnelSnapshot{
@@ -356,6 +359,9 @@ func (s *Service) UpdateSettings(name, addr, keyPath string) error {
 			s.mgr.Start()
 		}
 		return err
+	}
+	if oldAddr != addr {
+		s.mgr.ClearUpdatePolicy()
 	}
 	if wasRunning {
 		s.mgr.Start()

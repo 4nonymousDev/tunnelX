@@ -90,6 +90,25 @@ test('login preserves password whitespace and every mutation including logout se
   } finally { h.close() }
 })
 
+test('update policy saves explicit deadline with CSRF and exposes stale-generation conflicts', async () => {
+  const h = harness()
+  try {
+    await h.api.restoreSession()
+    const policy = { minimum_version: '0.2.1', enforce_after: '2026-10-04T12:00:00Z', message: 'Security update', generation: 2 }
+    h.route(({ url }) => url.endsWith('/client-update-policy') ? json(policy) : undefined)
+    assert.equal((await h.api.getClientUpdatePolicy()).generation, 2)
+    const body = { ...policy, expected_generation: 2, reason: 'test' }
+    delete body.generation
+    await h.api.setClientUpdatePolicy(body)
+    const saved = h.calls.find(call => call.init.method === 'PUT')
+    assert.deepEqual(JSON.parse(saved.init.body), body)
+    assert.equal(new Headers(saved.init.headers).get('X-CSRF-Token'), session.csrf_token)
+    assert.equal(saved.init.credentials, 'same-origin')
+    h.route(({ url }) => url.endsWith('/client-update-policy') ? json({}, 409) : undefined)
+    await assert.rejects(h.api.setClientUpdatePolicy(body), /刷新/)
+  } finally { h.close() }
+})
+
 test('401 clears data, cancels SSE and rejects stale work without repopulating a new login', async () => {
   const h = harness()
   try {
@@ -182,6 +201,7 @@ function componentScript(filename, props, extras = {}) {
       if (name === 'vue') return { ...vue, onUnmounted() {}, onMounted() {}, watch() {} }
       if (name.includes('useAdminApi')) return { useAdminApi: () => extras.api }
       if (name.endsWith('.vue')) return {}
+      if (name.endsWith('/utils/format')) return { formatDate: value => value }
       throw new Error(name)
     },
     defineProps: () => props,
@@ -218,4 +238,22 @@ test('account role controls submit explicit privilege changes with the expected 
   assert.equal(create.run('password.value'), '')
   assert.equal(create.emitted[0][1].password, '  synthetic password  ')
   assert.equal(create.emitted[0][1].is_admin, true)
+})
+
+test('policy form starts with seven days, preserves deadlines and sends a clean cancellation', async () => {
+  const saved = []
+  const c = componentScript('views/UpdatesView.vue', { api: {
+    async setClientUpdatePolicy(body) { saved.push(JSON.parse(JSON.stringify(body))); return { ...body, generation: body.expected_generation + 1 } },
+  } })
+  c.run("apply({minimum_version:'', enforce_after:null, message:'', generation:1}); enabled.value=true; setDefaultDeadline()")
+  const remaining = c.run('new Date(deadline.value).getTime() - Date.now()')
+  assert.ok(remaining > 7 * 86400000 - 61000 && remaining <= 7 * 86400000)
+  c.run("minimum.value='0.2.1'; message.value='Please update'; reason.value='Schedule security update'")
+  const expectedDeadline = c.run('new Date(deadline.value).toISOString()')
+  await c.run('save()')
+  assert.equal(saved[0].enforce_after, expectedDeadline)
+  assert.equal(saved[0].expected_generation, 1)
+  c.run("enabled.value=false; reason.value='Cancel update'")
+  await c.run('save()')
+  assert.deepEqual(saved[1], { minimum_version: '', enforce_after: null, message: '', expected_generation: 2, reason: 'Cancel update' })
 })

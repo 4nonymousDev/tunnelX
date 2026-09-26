@@ -13,7 +13,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 5
+const schemaVersion = 6
 const microsPerSecond = int64(time.Second / time.Microsecond)
 
 func openDatabase(path string) (*sql.DB, error) {
@@ -94,6 +94,16 @@ func (s *Store) migrate(ctx context.Context) error {
 			return fmt.Errorf("migrate schema v5: %w", err)
 		}
 		if _, err = tx.ExecContext(ctx, "PRAGMA user_version = 5"); err != nil {
+			return err
+		}
+	}
+	if v < 6 {
+		for _, q := range schemaV6 {
+			if _, err = tx.ExecContext(ctx, q); err != nil {
+				return fmt.Errorf("migrate schema v6: %w", err)
+			}
+		}
+		if _, err = tx.ExecContext(ctx, "PRAGMA user_version = 6"); err != nil {
 			return err
 		}
 	}

@@ -1,6 +1,6 @@
 {
   "name": "tunnelx-desktop",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "TunnelX desktop frontend",
   "main": "dist-electron/main/index.js",
@@ -15,7 +15,7 @@
     "build": "npm run typecheck && npm run build:renderer && npm run build:electron && npm run verify:preload",
     "package": "npm run build && electron-builder",
     "package:signed": "npm run build && electron-builder --config electron-builder.signed.cjs",
-    "test:security": "npm run build:electron && node --test scripts/security.test.cjs"
+    "test:security": "npm run build:electron && node --test scripts/security.test.cjs scripts/update-policy.test.cjs"
   },
   "dependencies": {
     "electron-updater": "6.8.9",

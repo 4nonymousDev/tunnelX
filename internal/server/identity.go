@@ -49,6 +49,10 @@ func (s *Server) handshake(sid string, conn *ssh.ServerConn, pc *proto.Conn) boo
 		return false
 	}
 	version := s.policy.Version()
+	if s.rejectClientVersion(conn, pc, h.ClientVersion) {
+		s.sessions.Disconnect(sid, proto.CodeUpdateRequired)
+		return false
+	}
 	if s.store != nil {
 		ctx, cancel := s.dbContext()
 		err = s.store.RecordIdentityClaim(ctx, current.Fingerprint, h.ID, h.Name, current.RemoteIP)
@@ -84,9 +88,16 @@ func (s *Server) handshake(sid string, conn *ssh.ServerConn, pc *proto.Conn) boo
 		s.notifyAudit(auditID)
 	}
 	admitted, err := s.policy.AdmitVersion(current.Fingerprint, version, func() error {
+		if s.clientVersionBlocked(h.ClientVersion) {
+			return errors.New("client update required")
+		}
 		return s.sessions.CompleteHello(sid, session.Hello{ClientID: h.ID, Name: h.Name, Role: h.Role, Version: h.ClientVersion})
 	})
 	if !admitted || err != nil {
+		if s.rejectClientVersion(conn, pc, h.ClientVersion) {
+			s.sessions.Disconnect(sid, proto.CodeUpdateRequired)
+			return false
+		}
 		code := proto.CodeServerBusy
 		if errors.Is(err, session.ErrDuplicateClient) {
 			code = proto.CodeDuplicateID
@@ -95,7 +106,7 @@ func (s *Server) handshake(sid string, conn *ssh.ServerConn, pc *proto.Conn) boo
 		return false
 	}
 	s.cancelHelloTimer(sid)
-	if s.sendControl(conn, pc, proto.HelloOK{V: proto.Version, Type: proto.TypeHelloOK, ServerVersion: s.cfg.Version, SessionID: sid, Fingerprint: current.Fingerprint}) != nil {
+	if s.sendControl(conn, pc, proto.HelloOK{V: proto.Version, Type: proto.TypeHelloOK, ServerVersion: s.cfg.Version, SessionID: sid, Fingerprint: current.Fingerprint, UpdatePolicy: s.clientUpdateStatus(h.ClientVersion)}) != nil {
 		return false
 	}
 	if s.adminAPI != nil {

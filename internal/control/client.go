@@ -21,6 +21,7 @@ import (
 	"tunnelx/internal/logbuf"
 	"tunnelx/internal/proto"
 	"tunnelx/internal/tunnel"
+	"tunnelx/internal/updatepolicy"
 )
 
 // Client 是控制通道的客户端一侧。
@@ -36,8 +37,9 @@ type Client struct {
 
 	role string
 
-	mu       sync.RWMutex
-	registry []proto.RegistryEntry
+	mu           sync.RWMutex
+	registry     []proto.RegistryEntry
+	updatePolicy *updatepolicy.Status
 	// published 记录已建立的 Export 隧道，键为稳定隧道 ID。
 	// published tracks established Export tunnels by stable tunnel ID.
 	published        map[string]proto.TunnelSpec
@@ -249,6 +251,22 @@ func (c *Client) readLoop() {
 			c.applyRegistry(raw)
 			continue
 		}
+		// Apply all policy messages on this reader in wire order. Applying
+		// HelloOK in the request goroutine could overwrite a newer registry.
+		if env.Type == proto.TypeHelloOK {
+			var hello proto.HelloOK
+			if proto.Decode(raw, &hello) == nil {
+				c.setUpdatePolicy(hello.UpdatePolicy)
+			}
+		}
+		if env.Type == proto.TypeError {
+			var e proto.Error
+			if proto.Decode(raw, &e) == nil && e.Code == proto.CodeUpdateRequired {
+				c.setUpdatePolicy(e.UpdatePolicy)
+				c.fail(&e)
+				return
+			}
+		}
 
 		// 其余均为应答，交给等待中的请求方。
 		// 缓冲区已满说明收到了无人等待的应答（服务端 bug 或协议错乱），
@@ -270,6 +288,7 @@ func (c *Client) applyRegistry(raw []byte) {
 		c.log.Warnf("ctrl", "解析注册表失败: %v", err)
 		return
 	}
+	c.setUpdatePolicy(reg.UpdatePolicy)
 
 	c.mu.Lock()
 	c.registry = reg.Entries
@@ -280,6 +299,26 @@ func (c *Client) applyRegistry(raw []byte) {
 	if fn != nil {
 		fn()
 	}
+}
+
+func (c *Client) setUpdatePolicy(value *updatepolicy.Status) {
+	c.mu.Lock()
+	previous := c.updatePolicy
+	c.updatePolicy = value
+	c.mu.Unlock()
+	if value != nil && value.Required && (previous == nil || previous.Generation != value.Generation || previous.Blocked != value.Blocked) {
+		c.log.Warnf("update", "%s", value.Reason())
+	}
+}
+
+func (c *Client) UpdatePolicy() *updatepolicy.Status {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.updatePolicy == nil {
+		return nil
+	}
+	p := *c.updatePolicy
+	return &p
 }
 
 // Registry 返回当前注册表快照，供 UI 展示可选的对端列表。

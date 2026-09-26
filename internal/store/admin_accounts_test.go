@@ -198,7 +198,7 @@ func TestAdminAccountMigrationPreservesV4AccountsDevicesAndBackup(t *testing.T) 
 	if err = s.db.QueryRow(`SELECT password_hash FROM accounts WHERE username=?`, a.Username).Scan(&originalHash); err != nil {
 		t.Fatal(err)
 	}
-	for _, query := range []string{`ALTER TABLE accounts DROP COLUMN is_admin`, `PRAGMA user_version=4`} {
+	for _, query := range []string{`DROP TABLE client_update_policy`, `ALTER TABLE accounts DROP COLUMN is_admin`, `PRAGMA user_version=4`} {
 		if _, err = s.db.Exec(query); err != nil {
 			t.Fatal(err)
 		}
@@ -236,7 +236,7 @@ func TestAdminAccountMigrationPreservesV4AccountsDevicesAndBackup(t *testing.T) 
 	if err = backup.QueryRow(`PRAGMA user_version`).Scan(&backupVersion); err != nil || backupVersion != 4 {
 		t.Fatalf("backup version=%d %v", backupVersion, err)
 	}
-	if err = s.db.QueryRow(`PRAGMA user_version`).Scan(&currentVersion); err != nil || currentVersion != 5 {
+	if err = s.db.QueryRow(`PRAGMA user_version`).Scan(&currentVersion); err != nil || currentVersion != schemaVersion {
 		t.Fatalf("current version=%d %v", currentVersion, err)
 	}
 	var backupHash string

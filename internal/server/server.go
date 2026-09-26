@@ -19,6 +19,7 @@ import (
 	"tunnelx/internal/proto"
 	"tunnelx/internal/session"
 	"tunnelx/internal/store"
+	"tunnelx/internal/updatepolicy"
 )
 
 type Config struct {
@@ -58,6 +59,7 @@ type Server struct {
 	auditStop               chan struct{}
 	auditDone               chan struct{}
 	loginRates              loginLimiter
+	clientUpdates           atomic.Pointer[updatepolicy.Policy]
 }
 
 func New(cfg Config, logf func(string, ...any)) (*Server, error) {
@@ -112,6 +114,12 @@ func New(cfg Config, logf func(string, ...any)) (*Server, error) {
 			blocks = append(blocks, policy.Block{Fingerprint: b.Fingerprint, Reason: b.Reason, Operator: b.Operator, CreatedAt: b.CreatedAt, ExpiresAt: b.ExpiresAt})
 		}
 		s.policy = policy.New(blocks)
+		updatePolicy, e := s.store.GetClientUpdatePolicy(context.Background())
+		if e != nil {
+			s.store.Close()
+			return nil, e
+		}
+		s.clientUpdates.Store(&updatePolicy)
 	} else {
 		s.policy = policy.New(nil)
 	}

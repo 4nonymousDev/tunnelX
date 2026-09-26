@@ -10,6 +10,7 @@ package proto
 import (
 	"fmt"
 	"time"
+	"tunnelx/internal/updatepolicy"
 )
 
 // ChannelType 是控制通道的 SSH channel 类型名。
@@ -88,11 +89,12 @@ type Hello struct {
 // HelloOK 是握手成功响应（S→C）。
 // HelloOK is the successful handshake response (server to client).
 type HelloOK struct {
-	V             int    `json:"v"`
-	Type          string `json:"type"`
-	ServerVersion string `json:"server_version"`
-	SessionID     string `json:"session_id"`
-	Fingerprint   string `json:"fingerprint"`
+	UpdatePolicy  *updatepolicy.Status `json:"update_policy,omitempty"`
+	V             int                  `json:"v"`
+	Type          string               `json:"type"`
+	ServerVersion string               `json:"server_version"`
+	SessionID     string               `json:"session_id"`
+	Fingerprint   string               `json:"fingerprint"`
 }
 
 // TunnelSpec 是 Exporter 上报的单条隧道。
@@ -153,9 +155,10 @@ func (e RegistryEntry) Target() Target {
 // Because importers do not report which peer they use, the server broadcasts and each
 // importer checks whether its target UUID remains present.
 type Registry struct {
-	V       int             `json:"v"`
-	Type    string          `json:"type"`
-	Entries []RegistryEntry `json:"entries"`
+	UpdatePolicy *updatepolicy.Status `json:"update_policy,omitempty"`
+	V            int                  `json:"v"`
+	Type         string               `json:"type"`
+	Entries      []RegistryEntry      `json:"entries"`
 }
 
 // Error 是错误响应（S→C）。
@@ -170,10 +173,11 @@ type Registry struct {
 // implements the error interface so errors.As can recover it through %w wrapping and
 // classification can trust the server-provided Code directly.
 type Error struct {
-	V    int    `json:"v"`
-	Type string `json:"type"`
-	Code string `json:"code"`
-	Msg  string `json:"msg"`
+	UpdatePolicy *updatepolicy.Status `json:"update_policy,omitempty"`
+	V            int                  `json:"v"`
+	Type         string               `json:"type"`
+	Code         string               `json:"code"`
+	Msg          string               `json:"msg"`
 }
 
 func (e *Error) Error() string {
@@ -188,7 +192,8 @@ func (e *Error) Error() string {
 // port-allocation failure and server busy are retryable; bad request indicates a
 // client bug and is not recoverable; internal errors are retryable.
 const (
-	CodeVersionMismatch    = "version_mismatch"  // 不可自愈：提示用户升级 / Unrecoverable: ask the user to upgrade.
+	CodeVersionMismatch    = "version_mismatch" // 不可自愈：提示用户升级 / Unrecoverable: ask the user to upgrade.
+	CodeUpdateRequired     = "update_required"
 	CodeDuplicateID        = "duplicate_id"      // 不可自愈：UUID 已被占用 / Unrecoverable: UUID already in use.
 	CodePortAllocFailed    = "port_alloc_failed" // 可自愈：退避重试 / Recoverable: retry with backoff.
 	CodeServerBusy         = "server_busy"       // 可自愈：退避重试 / Recoverable: retry with backoff.

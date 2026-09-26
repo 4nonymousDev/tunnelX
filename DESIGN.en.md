@@ -63,9 +63,11 @@ Accounts govern admission. Authorized devices still share visibility and access 
 
 ## Data and upgrades
 
-Client configuration uses schema 2 and the server database uses schema 5. Migrations create backups and retain device keys, stable IDs, tunnel relationships, authorizations, and audit semantics rather than regenerating identities.
+Client configuration uses schema 2 and the server database uses schema 6. Migrations create backups and retain device keys, stable IDs, tunnel relationships, authorizations, and audit semantics rather than regenerating identities.
 
 Identity bindings, account ownership, and administrative operations awaiting reconciliation remain persistent. Ordinary audit history is maintained under retention and space budgets. Rollback must restore matching program and database versions; an old program must not open an already migrated database.
+
+The minimum-client-version policy is off by default and persists a minimum CLI version, fixed deadline and generation. Policy changes and audits commit together before refreshing the in-memory policy. Optional metadata in existing v2 handshake, registry and error messages preserves compatibility during the grace period. Handshake, publication and forwarding admission enforce the deadline; periodic checks close existing unsupported sessions. Self-reported versions do not replace identity or binary-integrity verification.
 
 ## Code map
 

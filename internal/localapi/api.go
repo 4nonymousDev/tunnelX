@@ -27,6 +27,7 @@ import (
 	"tunnelx/internal/manager"
 	"tunnelx/internal/proto"
 	"tunnelx/internal/tunnel"
+	"tunnelx/internal/updatepolicy"
 )
 
 const APIVersion = 1
@@ -86,17 +87,18 @@ type ConfirmationDTO struct {
 }
 
 type SnapshotDTO struct {
-	Version       int               `json:"version"`
-	ClientVersion string            `json:"client_version,omitempty"`
-	ID            string            `json:"id"`
-	Name          string            `json:"name"`
-	ServerAddr    string            `json:"server_addr"`
-	KeyPath       string            `json:"key_path"`
-	Connection    ConnectionDTO     `json:"connection"`
-	Tunnels       []TunnelDTO       `json:"tunnels"`
-	Registry      []RegistryDTO     `json:"registry"`
-	Logs          []LogDTO          `json:"logs,omitempty"`
-	Pending       []ConfirmationDTO `json:"pending_confirmations,omitempty"`
+	UpdatePolicy  *updatepolicy.Status `json:"update_policy,omitempty"`
+	Version       int                  `json:"version"`
+	ClientVersion string               `json:"client_version,omitempty"`
+	ID            string               `json:"id"`
+	Name          string               `json:"name"`
+	ServerAddr    string               `json:"server_addr"`
+	KeyPath       string               `json:"key_path"`
+	Connection    ConnectionDTO        `json:"connection"`
+	Tunnels       []TunnelDTO          `json:"tunnels"`
+	Registry      []RegistryDTO        `json:"registry"`
+	Logs          []LogDTO             `json:"logs,omitempty"`
+	Pending       []ConfirmationDTO    `json:"pending_confirmations,omitempty"`
 }
 
 type RegistryDTO struct {
@@ -268,7 +270,8 @@ func (s *Server) snapshot(w http.ResponseWriter, _ *http.Request) {
 func makeSnapshot(s core.Snapshot) SnapshotDTO {
 	state := connectionStateName(s.Connection.State)
 	out := SnapshotDTO{Version: APIVersion, ClientVersion: s.Version, ID: s.Config.ID, Name: s.Config.Name,
-		ServerAddr: s.Config.ServerAddr, KeyPath: s.Config.KeyPath,
+		UpdatePolicy: s.UpdatePolicy,
+		ServerAddr:   s.Config.ServerAddr, KeyPath: s.Config.KeyPath,
 		Connection: ConnectionDTO{State: state, Reason: s.Connection.Reason, RetryAt: s.Connection.RetryAt},
 		Tunnels:    make([]TunnelDTO, 0, len(s.Tunnels)),
 		Registry:   make([]RegistryDTO, 0, len(s.Registry)),

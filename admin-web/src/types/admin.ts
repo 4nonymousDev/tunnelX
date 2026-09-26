@@ -200,3 +200,18 @@ export interface AdminSessionDto {
   csrf_token: string
   expires_at: string
 }
+export interface ClientUpdatePolicyDto {
+  minimum_version: string
+  enforce_after: string | null
+  message: string
+  generation: number
+  updated_at: string
+}
+
+export interface UpdatePolicyRequestDto {
+  minimum_version: string
+  enforce_after: string | null
+  message: string
+  expected_generation: number
+  reason: string
+}

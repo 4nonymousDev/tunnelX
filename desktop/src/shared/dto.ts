@@ -66,9 +66,21 @@ export interface RegistryDTO {
   client_version: string
 }
 
+export interface ClientUpdatePolicyDTO {
+  minimum_version: string
+  enforce_after: string
+  message: string
+  generation: number
+  updated_at: string
+  required: boolean
+  blocked: boolean
+  server_time: string
+}
+
 export interface SnapshotDTO {
   version: number
   client_version?: string
+  update_policy?: ClientUpdatePolicyDTO
   id: string
   name: string
   server_addr: string

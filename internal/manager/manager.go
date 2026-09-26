@@ -8,6 +8,7 @@ package manager
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -21,6 +22,7 @@ import (
 	"tunnelx/internal/proto"
 	"tunnelx/internal/sshconn"
 	"tunnelx/internal/tunnel"
+	"tunnelx/internal/updatepolicy"
 )
 
 // ConnState 是连接层的状态，供 UI 顶部横幅展示。
@@ -62,11 +64,12 @@ type Manager struct {
 	keyPermPrompt KeyPermPrompt
 	onConnChange  func()
 
-	mu      sync.RWMutex
-	status  ConnStatus
-	conn    *sshconn.Conn
-	ctrl    *control.Client
-	tunnels []*tunnel.Tunnel
+	mu           sync.RWMutex
+	status       ConnStatus
+	conn         *sshconn.Conn
+	ctrl         *control.Client
+	updatePolicy *updatepolicy.Status
+	tunnels      []*tunnel.Tunnel
 
 	version        string
 	onRegistry     func()
@@ -111,6 +114,27 @@ func (m *Manager) Registry() []proto.RegistryEntry {
 		return nil
 	}
 	return ctrl.Registry()
+}
+
+func (m *Manager) UpdatePolicy() *updatepolicy.Status {
+	m.mu.RLock()
+	ctrl, p := m.ctrl, m.updatePolicy
+	m.mu.RUnlock()
+	if ctrl != nil {
+		return ctrl.UpdatePolicy()
+	}
+	if p == nil {
+		return nil
+	}
+	copy := *p
+	return &copy
+}
+
+// ClearUpdatePolicy is called while stopped when settings switch servers.
+func (m *Manager) ClearUpdatePolicy() {
+	m.mu.Lock()
+	m.updatePolicy = nil
+	m.mu.Unlock()
 }
 
 // SetPrompts 注入 UI 交互回调。须在 Start 前调用。
@@ -354,6 +378,12 @@ func (m *Manager) loop(ctx context.Context) {
 		}
 
 		err := m.connectAndServe(ctx)
+		var perr *proto.Error
+		if errors.As(err, &perr) && perr.Code == proto.CodeUpdateRequired {
+			m.mu.Lock()
+			m.updatePolicy = perr.UpdatePolicy
+			m.mu.Unlock()
+		}
 		if m.ConnStatus().State == ConnConnected {
 			backoff.Reset()
 		}
@@ -449,7 +479,9 @@ func (m *Manager) connectAndServe(ctx context.Context) error {
 	m.runCtx = ctx
 	m.mu.Unlock()
 	defer func() {
+		lastPolicy := ctrl.UpdatePolicy()
 		m.mu.Lock()
+		m.updatePolicy = lastPolicy
 		m.ctrl = nil
 		m.conn = nil
 		m.runCtx = nil
@@ -476,6 +508,9 @@ func (m *Manager) connectAndServe(ctx context.Context) error {
 		return nil
 	case <-conn.Done():
 		m.stopTunnels()
+		if err := ctrl.Cause(); err != nil {
+			return err
+		}
 		return conn.Cause()
 	case <-ctrl.Done():
 		// 控制通道断了但 TCP 连接可能还在——此时注册表已过期、无法上报，

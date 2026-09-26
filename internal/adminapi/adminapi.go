@@ -129,6 +129,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request, rid string) {
+	if s.serveUpdatePolicy(w, r, rid) {
+		return
+	}
 	if s.serveAccounts(w, r, rid) {
 		return
 	}

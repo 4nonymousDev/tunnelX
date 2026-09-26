@@ -64,7 +64,7 @@ Connection, access, and management audits are now stored in SQLite; the new
 version does not create JSONL or logrotate configuration. If a legacy
 `/var/log/tunnel-server/audit.jsonl` exists during an upgrade, the installer
 keeps it for manual archival.
-The server database is schema 5; client configuration remains schema 2.
+The server database is schema 6; client configuration remains schema 2.
 
 Uninstall with:
 
@@ -74,6 +74,16 @@ sudo ./install.sh --uninstall --purge  # Delete configuration and data
 ```
 
 See [DEPLOY.en.md](../DEPLOY.en.md) for the complete guide.
+
+## Optional and required client updates
+
+Required updates are disabled by default. Publish ordinary updates for users to install when convenient. For a required update, publish a usable client package first, then open **客户端更新** in the admin console, enable the policy, and set a minimum version, deadline, message, and audit reason. The default grace period is **7 days**, and the administrator can adjust it. The minimum refers to the CLI core version; verify the version bundled with the desktop package.
+
+Older clients keep working during the grace period. GUI/CLI 0.2.1 and later display the requirement. After the server's deadline, unsupported versions cannot establish new sessions or forwarding channels, and existing sessions and tunnels are closed, normally within one second (subject to the control write timeout). Supported clients remain connected. The fixed deadline survives server restarts and client reconnects. Administrators can postpone or disable the policy; a disconnected client can then reconnect manually. Keys, accounts, configuration and tunnels are preserved. Database migration does not enable this policy.
+
+Older v2 clients lack the new reminder UI but remain usable during the grace period and are subject to server enforcement afterwards. v1 is incompatible. A future incompatible protocol change requires advance client upgrades while the server still supports the old protocol; a grace period cannot bridge incompatible protocols.
+
+The server never supplies executable update commands or download URLs. Signed desktop releases retain the existing publisher verification and configured release feed; unsigned local builds require manual installation of a trusted package. Client versions are self-reported compatibility metadata, not proof of binary integrity or vulnerability remediation.
 
 ## Existing installations and recovery
 
