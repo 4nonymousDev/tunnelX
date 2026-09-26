@@ -73,6 +73,7 @@ config.json.tmp
 /docs/
 /AGENTS.md
 /UPGRADE_RESULT.md
+/UPGRADE_GUIDE.md
 
 # ---- Go ----
 # ---- Go ----

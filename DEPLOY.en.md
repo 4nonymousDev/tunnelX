@@ -5,7 +5,7 @@ management REST API, and the management SPA. The tunnel endpoint listens on
 `:2222` by default; the management endpoint is forced to listen only on
 `127.0.0.1:2223`.
 
-For an existing public server, follow the [upgrade instructions](UPGRADE_GUIDE.md). Account login requires updated server and client programs while retaining their keys and configuration. Already authorized v2 clients outside account management may continue under the original manual authorization rules.
+For an existing public server, follow the [upgrade instructions](deploy/README.en.md#existing-installations-and-recovery). Account login requires updated server and client programs while retaining their keys and configuration. Already authorized v2 clients outside account management may continue under the original manual authorization rules.
 
 ## Build
 
@@ -128,4 +128,4 @@ Before a backup, briefly stop the service and copy all of
 `/var/lib/tunnel-server`. Database timestamps are UTC Unix microseconds; the
 boundary for “rejected today” uses the server operating system's timezone.
 
-The current database is schema 5, including explicit administrator privileges, accounts and device ownership; client configuration remains schema 2. Recovery requires matching program and complete database backups. Version 1 clients must upgrade to v2, which routes to the exact exporter session and publication generation without relay ports. Unsupported authorization-file options or invalid contents fail closed. See the [upgrade instructions](UPGRADE_GUIDE.md) and [deployment guide](deploy/README.en.md).
+The current database is schema 5, including explicit administrator privileges, accounts and device ownership; client configuration remains schema 2. Recovery requires matching program and complete database backups. Version 1 clients must upgrade to v2, which routes to the exact exporter session and publication generation without relay ports. Unsupported authorization-file options or invalid contents fail closed. See the [upgrade instructions](deploy/README.en.md#existing-installations-and-recovery) and [deployment guide](deploy/README.en.md).

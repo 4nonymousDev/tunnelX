@@ -26,7 +26,7 @@ TunnelX is an SSH port-forwarding tool for remote development and debugging. It 
 - Importers bind a verified device, public key, and tunnel ID, checking the current session and publication generation on each connection.
 - The server provides no shell and accepts no arbitrary server-address or TCP-port forwarding.
 
-For an existing installation, read the [upgrade instructions](UPGRADE_GUIDE.md). Account login requires updated server and client programs; existing keys, IDs, and tunnel configurations are retained. Already authorized v2 clients outside account management may continue under their manual authorization rules.
+For an existing installation, read the [upgrade instructions](deploy/README.en.md#existing-installations-and-recovery). Account login requires updated server and client programs; existing keys, IDs, and tunnel configurations are retained. Already authorized v2 clients outside account management may continue under their manual authorization rules.
 
 ## Quick Start
 
@@ -89,7 +89,7 @@ Then open `http://localhost:<your-local-port>` to reach the peer service.
 
 Desktop configuration defaults to Electron's `userData/config.json`; the CLI uses its selected configuration file. Manual editing is normally unnecessary.
 
-Client configuration remains at schema 2; the server database upgrades to schema 5. Migrations preserve existing identities, keys, and tunnels. Back up before upgrading; see the [upgrade instructions](UPGRADE_GUIDE.md).
+Client configuration remains at schema 2; the server database upgrades to schema 5. Migrations preserve existing identities, keys, and tunnels. Back up before upgrading; see the [upgrade instructions](deploy/README.en.md#existing-installations-and-recovery).
 
 See [config.example.json](config.example.json) for a complete annotated example.
 
@@ -309,4 +309,4 @@ These boundaries are enforced by `internal/server/security_test.go`; loosening t
 
 The complete path has been tested between Windows 11 and a Linux server. Core functionality is usable and details continue to be refined. Issues are welcome.
 
-Security upgrade: account login requires updated server and client programs. Existing keys, IDs, and tunnels are retained. Previously authorized v2 devices may continue under manual authorization until enrolled into an account; v1 programs must upgrade. The database is schema 5 and client configuration remains schema 2. Preserve matching program and data backups when recovering. See the [account login guide](ACCOUNT_LOGIN_GUIDE.md), [upgrade instructions](UPGRADE_GUIDE.md), and [deployment guide](deploy/README.en.md).
+Security upgrade: account login requires updated server and client programs. Existing keys, IDs, and tunnels are retained. Previously authorized v2 devices may continue under manual authorization until enrolled into an account; v1 programs must upgrade. The database is schema 5 and client configuration remains schema 2. Preserve matching program and data backups when recovering. See the [account login guide](ACCOUNT_LOGIN_GUIDE.md), [upgrade instructions](deploy/README.en.md#existing-installations-and-recovery), and [deployment guide](deploy/README.en.md).

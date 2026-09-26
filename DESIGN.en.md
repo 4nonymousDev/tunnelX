@@ -2,7 +2,7 @@
 
 [中文](DESIGN.md)
 
-This document describes the current implementation. See [README](README.en.md) for usage, [BUILD](BUILD.en.md) for development, and [DEPLOY](DEPLOY.en.md) and the [upgrade guide](UPGRADE_GUIDE.md) for deployment and migration.
+This document describes the current implementation. See [README](README.en.md) for usage, [BUILD](BUILD.en.md) for development, and [DEPLOY](DEPLOY.en.md) and the [upgrade guide](deploy/README.en.md#existing-installations-and-recovery) for deployment and migration.
 
 ## Components
 

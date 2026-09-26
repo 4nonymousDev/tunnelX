@@ -2,7 +2,7 @@
 
 [English](DESIGN.en.md)
 
-本文描述当前实现。使用方法见 [README](README.md)，构建见 [BUILD](BUILD.md)，部署与迁移见 [DEPLOY](DEPLOY.md) 和 [升级说明](UPGRADE_GUIDE.md)。
+本文描述当前实现。使用方法见 [README](README.md)，构建见 [BUILD](BUILD.md)，部署与迁移见 [DEPLOY](DEPLOY.md) 和 [升级说明](deploy/README.md#已有服务升级与恢复)。
 
 ## 组件
 
