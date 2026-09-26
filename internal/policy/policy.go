@@ -4,6 +4,7 @@ package policy
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -20,13 +21,17 @@ type Loader interface {
 }
 
 type Policy struct {
-	gate   sync.RWMutex
-	blocks map[string]Block
-	now    func() time.Time
+	gate      sync.RWMutex
+	change    sync.Mutex
+	pending   map[string]bool
+	version   uint64
+	uncertain bool
+	blocks    map[string]Block
+	now       func() time.Time
 }
 
 func New(blocks []Block) *Policy {
-	p := &Policy{blocks: map[string]Block{}, now: time.Now}
+	p := &Policy{blocks: map[string]Block{}, pending: map[string]bool{}, now: time.Now}
 	p.replace(blocks)
 	return p
 }
@@ -51,12 +56,66 @@ func (p *Policy) Blocked(fingerprint string) bool {
 	return p.blockedLocked(fingerprint, p.now().UTC())
 }
 
-// Change exclusively gates persistence, snapshot update, and session removal.
+// Change gates only short in-memory changes. Callbacks MUST NOT do database/network I/O.
 func (p *Policy) Change(fn func(*Snapshot) error) error {
 	p.gate.Lock()
 	defer p.gate.Unlock()
+	p.version++
+	defer func() { p.version++ }()
 	s := &Snapshot{p: p}
 	return fn(s)
+}
+
+// PersistChange denies the affected fingerprint while persistence runs outside
+// the admission gate. Unrelated identities remain available during slow I/O.
+// Management changes serialize, so a failed write cannot overwrite a newer state.
+func (p *Policy) PersistChange(fp string, persist func() error, commit func(*Snapshot)) error {
+	return p.PersistChanges([]string{fp}, persist, commit)
+}
+
+// PersistChanges also covers key rotation: both the previous and replacement
+// fingerprints are denied until the durable identity change has completed.
+func (p *Policy) PersistChanges(fingerprints []string, persist func() error, commit func(*Snapshot)) error {
+	p.change.Lock()
+	defer p.change.Unlock()
+	p.gate.Lock()
+	p.version++
+	for _, fp := range fingerprints {
+		if fp != "" {
+			p.pending[fp] = true
+		}
+	}
+	p.gate.Unlock()
+	err := persist()
+	p.gate.Lock()
+	defer p.gate.Unlock()
+	p.version++
+	if errors.Is(err, store.ErrCommitOutcomeUnknown) {
+		p.uncertain = true
+	}
+	if err == nil && commit != nil {
+		commit(&Snapshot{p: p})
+	}
+	for _, fp := range fingerprints {
+		delete(p.pending, fp)
+	}
+	return err
+}
+
+func (p *Policy) Version() uint64 { p.gate.RLock(); defer p.gate.RUnlock(); return p.version }
+
+// AdmitVersion joins an earlier lock-free database validation with the final
+// in-memory admission. The callback may manipulate memory only, never perform I/O.
+func (p *Policy) AdmitVersion(fp string, expected uint64, register func() error) (bool, error) {
+	p.gate.RLock()
+	defer p.gate.RUnlock()
+	if p.version != expected || p.blockedLocked(fp, p.now().UTC()) {
+		return false, nil
+	}
+	if register != nil {
+		return true, register()
+	}
+	return true, nil
 }
 
 type Snapshot struct{ p *Policy }
@@ -66,6 +125,8 @@ func (s *Snapshot) Delete(fp string)       { delete(s.p.blocks, fp) }
 func (s *Snapshot) Blocked(fp string) bool { return s.p.blockedLocked(fp, s.p.now().UTC()) }
 
 func (p *Policy) Reload(ctx context.Context, l Loader) error {
+	p.change.Lock()
+	defer p.change.Unlock()
 	now := p.now().UTC()
 	entries, err := l.ActiveBlacklist(ctx, now)
 	if err != nil {
@@ -76,6 +137,7 @@ func (p *Policy) Reload(ctx context.Context, l Loader) error {
 		bs = append(bs, Block{Fingerprint: b.Fingerprint, Reason: b.Reason, Operator: b.Operator, CreatedAt: b.CreatedAt, ExpiresAt: b.ExpiresAt})
 	}
 	p.gate.Lock()
+	p.version++
 	p.replace(bs)
 	p.gate.Unlock()
 	return nil
@@ -92,6 +154,12 @@ func (p *Policy) replace(bs []Block) {
 	p.blocks = next
 }
 func (p *Policy) blockedLocked(fp string, now time.Time) bool {
+	if p.uncertain {
+		return true
+	}
+	if p.pending[fp] {
+		return true
+	}
 	b, ok := p.blocks[fp]
 	if !ok {
 		return false

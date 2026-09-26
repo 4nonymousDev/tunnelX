@@ -3,8 +3,8 @@ package server
 import (
 	"fmt"
 	"io"
-	"net"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,251 +12,455 @@ import (
 	"tunnelx/internal/proto"
 )
 
-// TestCrossConnectionForward 复现真实拓扑：Exporter 与 Importer 是**两个独立的
-// SSH 连接**（两台机器上的两个进程）。
-// 既有的 e2e 测试虽然也建了两条连接，但都在同一进程内，且转发端口的分配与访问
-// 时序被测试代码串起来了。此处严格模拟：
-//
-//	连接A（Exporter）请求 -R，服务端分配端口 P 并在 127.0.0.1:P 监听
-//	连接B（Importer）请求 direct-tcpip 连往 127.0.0.1:P
-//	→ 服务端须把 B 的数据经由 A 送到 A 那侧的本地服务
-//
-// 关键在于：服务端收到 B 的 direct-tcpip 后，会去 Dial 自己的 127.0.0.1:P，
-// 而那个监听属于连接 A——数据须跨连接流转。
-// TestCrossConnectionForward models separate Exporter and Importer SSH connections:
-// B reaches a loopback port owned by A and the server must route data across connections.
+// The server must route between independently authenticated SSH connections,
+// without opening a local TCP port or interpreting an address as authority.
 func TestCrossConnectionForward(t *testing.T) {
 	addr, keyPath := startServer(t)
-
-	// Exporter 那侧的本地服务（相当于 nginx）
-	// The Exporter's local service, equivalent to nginx.
-	echoLn, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("启动本地服务: %v", err)
+	exporter := dialWith(t, addr, keyPath)
+	exportPC, control := openTestControl(t, exporter, proto.RoleExporter, "cross-exporter")
+	defer control.Close()
+	forwarded := exporter.HandleChannelOpen(proto.ForwardChannelType)
+	ack := publishManagementTunnels(t, exportPC, []proto.TunnelSpec{{TunnelID: "http", SrcHost: "127.0.0.1", SrcPort: 8080, Name: "HTTP"}})
+	if len(ack.Targets) != 1 {
+		t.Fatalf("targets: %+v", ack.Targets)
 	}
-	defer echoLn.Close()
+	target := ack.Targets[0]
+	observed := make(chan error, 1)
 	go func() {
-		for {
-			c, err := echoLn.Accept()
-			if err != nil {
+		select {
+		case incoming := <-forwarded:
+			got, err := proto.DecodeOpen(incoming.ExtraData())
+			if err != nil || got != target {
+				_ = incoming.Reject(ssh.Prohibited, "wrong identity")
+				observed <- fmt.Errorf("forwarded target %+v: %v", got, err)
 				return
 			}
-			go func() {
-				defer c.Close()
-				// 模拟 HTTP：收到任意请求就回一段固定内容
-				// Simulate HTTP by returning fixed content for any request.
-				buf := make([]byte, 1024)
-				n, _ := c.Read(buf)
-				fmt.Fprintf(c, "OK:%s", string(buf[:n]))
-			}()
-		}
-	}()
-	localAddr := echoLn.Addr().String()
-
-	// ---- 连接 A：Exporter ----
-	// ---- Connection A: Exporter ----
-	expClient := dialWith(t, addr, keyPath)
-	expPC, expCtrl := openTestControl(t, expClient, proto.RoleExporter, "cross-exporter")
-	defer expCtrl.Close()
-
-	remoteLn, err := expClient.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("请求远程转发: %v", err)
-	}
-	defer remoteLn.Close()
-
-	remotePort := remoteLn.Addr().(*net.TCPAddr).Port
-	t.Logf("服务端分配转发端口: %d", remotePort)
-	publishTestPort(t, expPC, remotePort)
-
-	// Exporter 侧：接受回送的连接并转给本地服务
-	// Exporter side: accept returned connections and proxy them to the local service.
-	go func() {
-		for {
-			in, err := remoteLn.Accept()
+			channel, requests, err := incoming.Accept()
 			if err != nil {
+				observed <- err
 				return
 			}
-			go func() {
-				defer in.Close()
-				out, err := net.DialTimeout("tcp", localAddr, 5*time.Second)
-				if err != nil {
-					t.Logf("Exporter 连本地服务失败: %v", err)
-					return
-				}
-				defer out.Close()
-
-				done := make(chan struct{}, 2)
-				go func() { io.Copy(out, in); done <- struct{}{} }()
-				go func() { io.Copy(in, out); done <- struct{}{} }()
-				<-done
-			}()
+			defer channel.Close()
+			go ssh.DiscardRequests(requests)
+			data, err := io.ReadAll(channel)
+			if err == nil {
+				_, err = channel.Write(append([]byte("OK:"), data...))
+			}
+			_ = channel.CloseWrite()
+			observed <- err
+		case <-time.After(3 * time.Second):
+			observed <- fmt.Errorf("exporter did not receive forwarding channel")
 		}
 	}()
-
-	// ---- 连接 B：Importer（独立的 SSH 连接）----
-	// ---- Connection B: Importer on an independent SSH connection ----
-	impClient := dialWith(t, addr, keyPath)
-	_, impCtrl := openTestControl(t, impClient, proto.RoleImporter, "cross-importer")
-	defer impCtrl.Close()
-
-	conn, err := impClient.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", remotePort))
+	importer := dialWith(t, addr, keyPath)
+	_, importControl := openTestControl(t, importer, proto.RoleImporter, "cross-importer")
+	defer importControl.Close()
+	payload, _ := proto.EncodeOpen(target)
+	channel, requests, err := importer.OpenChannel(proto.OpenChannelType, payload)
 	if err != nil {
-		t.Fatalf("Importer 经服务端连接转发端口失败: %v", err)
+		t.Fatal(err)
 	}
-	defer conn.Close()
-
-	conn.SetDeadline(time.Now().Add(10 * time.Second))
-
-	const req = "GET / HTTP/1.0\r\n\r\n"
-	if _, err := conn.Write([]byte(req)); err != nil {
-		t.Fatalf("写入: %v", err)
+	defer channel.Close()
+	go ssh.DiscardRequests(requests)
+	timer := time.AfterFunc(3*time.Second, func() { _ = importer.Close() })
+	defer timer.Stop()
+	if _, err = channel.Write([]byte("request")); err != nil {
+		t.Fatal(err)
 	}
+	_ = channel.CloseWrite()
+	data, err := io.ReadAll(channel)
+	if err != nil || string(data) != "OK:request" {
+		t.Fatalf("cross connection response %q: %v", data, err)
+	}
+	if err := <-observed; err != nil {
+		t.Fatal(err)
+	}
+}
 
-	buf := make([]byte, 128)
-	n, err := conn.Read(buf)
+func TestUnknownOrForgedTargetRejected(t *testing.T) {
+	addr, keyPath := startServer(t)
+	exporter := dialWith(t, addr, keyPath)
+	pc, ctrl := openTestControl(t, exporter, proto.RoleExporter, "cross-exporter")
+	defer ctrl.Close()
+	incoming := exporter.HandleChannelOpen(proto.ForwardChannelType)
+	ack := publishManagementTunnels(t, pc, []proto.TunnelSpec{{TunnelID: "web", SrcPort: 80}})
+	target := ack.Targets[0]
+	importer := dialWith(t, addr, keyPath)
+	_, ctrl2 := openTestControl(t, importer, proto.RoleImporter, "cross-importer")
+	defer ctrl2.Close()
+	cases := map[string]func(*proto.Target){
+		"unknown client":    func(x *proto.Target) { x.ClientID = "unknown" },
+		"wrong fingerprint": func(x *proto.Target) { x.Fingerprint = "SHA256:other" },
+		"wrong tunnel":      func(x *proto.Target) { x.TunnelID = "other" },
+		"wrong session":     func(x *proto.Target) { x.SessionID = "expired" },
+		"wrong generation":  func(x *proto.Target) { x.Generation++ },
+	}
+	for name, change := range cases {
+		t.Run(name, func(t *testing.T) {
+			bad := target
+			change(&bad)
+			raw, _ := proto.EncodeOpen(bad)
+			if ch, _, err := importer.OpenChannel(proto.OpenChannelType, raw); err == nil {
+				ch.Close()
+				t.Fatal("forged target accepted")
+			}
+		})
+	}
+	for _, raw := range [][]byte{[]byte(`{"v":1,"target":{}}`), []byte(`{"v":2,"target":{}}`), []byte("malformed")} {
+		if ch, _, err := importer.OpenChannel(proto.OpenChannelType, raw); err == nil {
+			ch.Close()
+			t.Fatal("invalid payload accepted")
+		}
+	}
+	select {
+	case received := <-incoming:
+		_ = received.Reject(ssh.Prohibited, "unexpected")
+		t.Fatal("invalid request reached exporter")
+	default:
+	}
+}
+
+func TestOwnerRejectionReleasesOpenBudget(t *testing.T) {
+	addr, keyPath := startServer(t, func(c *Config) { c.Limits.ChannelsPerSession = 2; c.Limits.ChannelsTotal = 2 })
+	exporter := dialWith(t, addr, keyPath)
+	pc, ctrl := openTestControl(t, exporter, proto.RoleExporter, "cross-exporter")
+	defer ctrl.Close()
+	incoming := exporter.HandleChannelOpen(proto.ForwardChannelType)
+	target := publishManagementTunnels(t, pc, []proto.TunnelSpec{{TunnelID: "web", SrcPort: 80}}).Targets[0]
+	var accepts atomic.Int32
+	go func() {
+		for n := range incoming {
+			if accepts.Add(1) == 1 {
+				_ = n.Reject(ssh.ConnectionFailed, "service offline")
+				continue
+			}
+			ch, requests, err := n.Accept()
+			if err != nil {
+				continue
+			}
+			go ssh.DiscardRequests(requests)
+			_, _ = ch.Write([]byte("ready"))
+			_ = ch.CloseWrite()
+			_ = ch.Close()
+		}
+	}()
+	importer := dialWith(t, addr, keyPath)
+	_, ctrl2 := openTestControl(t, importer, proto.RoleImporter, "cross-importer")
+	defer ctrl2.Close()
+	raw, _ := proto.EncodeOpen(target)
+	if ch, _, err := importer.OpenChannel(proto.OpenChannelType, raw); err == nil {
+		ch.Close()
+		t.Fatal("owner rejection ignored")
+	}
+	var connected ssh.Channel
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		ch, requests, err := importer.OpenChannel(proto.OpenChannelType, raw)
+		if err == nil {
+			go ssh.DiscardRequests(requests)
+			connected = ch
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if connected == nil {
+		t.Fatal("rejected open leaked the only channel budget")
+	}
+	defer connected.Close()
+	_ = connected.CloseWrite()
+	got, err := io.ReadAll(connected)
+	if err != nil || string(got) != "ready" {
+		t.Fatalf("recovered stream %q %v", got, err)
+	}
+}
+
+func TestOwnerOpenTimeoutClosesUnresponsiveConnection(t *testing.T) {
+	addr, keyPath := startServer(t, func(c *Config) { c.OpenTimeout = 100 * time.Millisecond; c.WriteTimeout = 500 * time.Millisecond })
+	exporter := dialWith(t, addr, keyPath)
+	pc, ctrl := openTestControl(t, exporter, proto.RoleExporter, "cross-exporter")
+	defer ctrl.Close()
+	incoming := exporter.HandleChannelOpen(proto.ForwardChannelType)
+	target := publishManagementTunnels(t, pc, []proto.TunnelSpec{{TunnelID: "slow", SrcPort: 80}}).Targets[0]
+	seen := make(chan struct{})
+	go func() {
+		if _, ok := <-incoming; ok {
+			close(seen)
+		}
+	}() // Deliberately never Accept/Reject.
+	importer := dialWith(t, addr, keyPath)
+	_, ctrl2 := openTestControl(t, importer, proto.RoleImporter, "cross-importer")
+	defer ctrl2.Close()
+	raw, _ := proto.EncodeOpen(target)
+	result := make(chan error, 1)
+	go func() {
+		ch, _, err := importer.OpenChannel(proto.OpenChannelType, raw)
+		if ch != nil {
+			_ = ch.Close()
+		}
+		result <- err
+	}()
+	select {
+	case <-seen:
+	case <-time.After(2 * time.Second):
+		t.Fatal("request did not reach exporter")
+	}
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("unanswered open accepted")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("open was not bounded")
+	}
+	ownerClosed := make(chan error, 1)
+	go func() { ownerClosed <- exporter.Wait() }()
+	select {
+	case <-ownerClosed:
+	case <-time.After(time.Second):
+		t.Fatal("unresponsive owner transport remained open")
+	}
+	// Only the non-responsive owner is retired; the importer remains usable.
+	if _, _, err := importer.SendRequest("keepalive@openssh.com", true, nil); err != nil {
+		t.Fatalf("importer was unnecessarily disconnected: %v", err)
+	}
+}
+
+// An importer can disappear while a healthy exporter is still preparing its
+// local connection. Cancellation must retire only this pending stream.
+func TestVisitorCancellationPreservesResponsiveOwner(t *testing.T) {
+	addr, keyPath := startServer(t, func(c *Config) { c.OpenTimeout = 2 * time.Second })
+	exporter := dialWith(t, addr, keyPath)
+	pc, ctrl := openTestControl(t, exporter, proto.RoleExporter, "cross-exporter")
+	defer ctrl.Close()
+	incoming := exporter.HandleChannelOpen(proto.ForwardChannelType)
+	target := publishManagementTunnels(t, pc, []proto.TunnelSpec{{TunnelID: "web", SrcPort: 80}}).Targets[0]
+	importer := dialWith(t, addr, keyPath)
+	_, ctrl2 := openTestControl(t, importer, proto.RoleImporter, "cross-importer")
+	defer ctrl2.Close()
+	raw, _ := proto.EncodeOpen(target)
+	openResult := make(chan error, 1)
+	go func() {
+		ch, _, err := importer.OpenChannel(proto.OpenChannelType, raw)
+		if ch != nil {
+			_ = ch.Close()
+		}
+		openResult <- err
+	}()
+	var pending ssh.NewChannel
+	select {
+	case pending = <-incoming:
+	case <-time.After(time.Second):
+		t.Fatal("request did not reach exporter")
+	}
+	ownerClosed := make(chan error, 1)
+	go func() { ownerClosed <- exporter.Wait() }()
+	_ = importer.Close()
+	select {
+	case <-openResult:
+	case <-time.After(time.Second):
+		t.Fatal("disconnected importer open did not finish")
+	}
+	select {
+	case err := <-ownerClosed:
+		t.Fatalf("importer cancellation retired a healthy exporter: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	ch, requests, err := pending.Accept()
 	if err != nil {
-		t.Fatalf("读取失败（数据未能跨连接流转）: %v", err)
+		t.Fatalf("healthy exporter could not complete its pending reply: %v", err)
 	}
+	go ssh.DiscardRequests(requests)
+	defer ch.Close()
+	if _, _, err := exporter.SendRequest("keepalive@openssh.com", true, nil); err != nil {
+		t.Fatalf("exporter did not survive cancellation: %v", err)
+	}
+}
 
-	got := string(buf[:n])
-	t.Logf("经隧道收到: %q", got)
-	if len(got) == 0 {
-		t.Fatal("收到空响应")
+func TestCancelledPendingOpenRetainsItsBudgetUntilOwnerReplies(t *testing.T) {
+	addr, keyPath := startServer(t, func(c *Config) {
+		c.OpenTimeout = 2 * time.Second
+		c.Limits.ChannelsPerSession = 2
+		c.Limits.ChannelsTotal = 2
+	})
+	exporter := dialWith(t, addr, keyPath)
+	pc, ctrl := openTestControl(t, exporter, proto.RoleExporter, "cross-exporter")
+	defer ctrl.Close()
+	incoming := exporter.HandleChannelOpen(proto.ForwardChannelType)
+	target := publishManagementTunnels(t, pc, []proto.TunnelSpec{{TunnelID: "web", SrcPort: 80}}).Targets[0]
+	importer := dialWith(t, addr, keyPath)
+	_, ctrl2 := openTestControl(t, importer, proto.RoleImporter, "cross-importer")
+	defer ctrl2.Close()
+	raw, _ := proto.EncodeOpen(target)
+	firstDone := make(chan struct{})
+	go func() {
+		ch, _, _ := importer.OpenChannel(proto.OpenChannelType, raw)
+		if ch != nil {
+			_ = ch.Close()
+		}
+		close(firstDone)
+	}()
+	var pending ssh.NewChannel
+	select {
+	case pending = <-incoming:
+	case <-time.After(time.Second):
+		t.Fatal("first request did not reach exporter")
+	}
+	_ = importer.Close()
+	select {
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatal("first importer open did not stop")
+	}
+	other := dialWith(t, addr, keyPath)
+	_, ctrl3 := openTestControl(t, other, proto.RoleImporter, "same-conn-test")
+	defer ctrl3.Close()
+	second := make(chan error, 1)
+	go func() {
+		ch, _, err := other.OpenChannel(proto.OpenChannelType, raw)
+		if ch != nil {
+			_ = ch.Close()
+		}
+		second <- err
+	}()
+	select {
+	case unexpected := <-incoming:
+		if unexpected != nil {
+			_ = unexpected.Reject(ssh.Prohibited, "budget must be retained")
+		}
+		t.Fatal("cancelled pending open prematurely released its budget or owner connection")
+	case err := <-second:
+		if err == nil {
+			t.Fatal("second open exceeded the sole active flow budget")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("excess open was not rejected promptly")
+	}
+	if err := pending.Reject(ssh.ConnectionFailed, "local service unavailable"); err != nil {
+		t.Fatalf("owner connection did not survive visitor cancellation: %v", err)
+	}
+	go func() {
+		for next := range incoming {
+			ch, requests, err := next.Accept()
+			if err != nil {
+				continue
+			}
+			go ssh.DiscardRequests(requests)
+			_, _ = ch.Write([]byte("ready"))
+			_ = ch.CloseWrite()
+			_ = ch.Close()
+		}
+	}()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		ch, requests, err := other.OpenChannel(proto.OpenChannelType, raw)
+		if err != nil {
+			time.Sleep(20 * time.Millisecond)
+			continue
+		}
+		go ssh.DiscardRequests(requests)
+		_ = ch.CloseWrite()
+		data, err := io.ReadAll(ch)
+		_ = ch.Close()
+		if err != nil || string(data) != "ready" {
+			t.Fatalf("recovered flow %q: %v", data, err)
+		}
+		return
+	}
+	t.Fatal("completed cancellation did not release the flow budget")
+}
+
+func TestOwnerRequestsCannotExhaustVisitorsRateBudget(t *testing.T) {
+	addr, keyPath := startServer(t)
+	exporter := dialWith(t, addr, keyPath)
+	pc, ctrl := openTestControl(t, exporter, proto.RoleExporter, "cross-exporter")
+	defer ctrl.Close()
+	incoming := exporter.HandleChannelOpen(proto.ForwardChannelType)
+	target := publishManagementTunnels(t, pc, []proto.TunnelSpec{{TunnelID: "web", SrcPort: 80}}).Targets[0]
+	ownerChannel := make(chan ssh.Channel, 1)
+	go func() {
+		n := <-incoming
+		if n == nil {
+			ownerChannel <- nil
+			return
+		}
+		ch, requests, err := n.Accept()
+		if err != nil {
+			ownerChannel <- nil
+			return
+		}
+		go ssh.DiscardRequests(requests)
+		ownerChannel <- ch
+	}()
+	importer := dialWith(t, addr, keyPath)
+	_, ctrl2 := openTestControl(t, importer, proto.RoleImporter, "cross-importer")
+	defer ctrl2.Close()
+	raw, _ := proto.EncodeOpen(target)
+	ch, requests, err := importer.OpenChannel(proto.OpenChannelType, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ch.Close()
+	go ssh.DiscardRequests(requests)
+	out := <-ownerChannel
+	if out == nil {
+		t.Fatal("owner channel failed")
+	}
+	defer out.Close()
+	timer := time.AfterFunc(2*time.Second, func() { _ = exporter.Close() })
+	defer timer.Stop()
+	// The target is malicious. Its request flood must be charged only to its
+	// own connection, leaving the visitor's other tunnels and control usable.
+	for i := 0; i < 100; i++ {
+		if _, err = out.SendRequest("unsupported-owner-request", true, nil); err != nil {
+			break
+		}
+	}
+	if _, _, err := importer.SendRequest("keepalive@openssh.com", true, nil); err != nil {
+		t.Fatalf("owner exhausted another client's request budget: %v", err)
 	}
 }
 
 func openTestControl(t *testing.T, client *ssh.Client, role, id string) (*proto.Conn, ssh.Channel) {
 	t.Helper()
-	ch, reqs, err := client.OpenChannel(proto.ChannelType, nil)
+	ch, requests, err := client.OpenChannel(proto.ChannelType, nil)
 	if err != nil {
-		t.Fatalf("打开控制通道: %v", err)
+		t.Fatal(err)
 	}
-	go ssh.DiscardRequests(reqs)
+	go ssh.DiscardRequests(requests)
 	pc := proto.NewConn(ch)
 	if err = pc.Send(proto.Hello{V: proto.Version, Type: proto.TypeHello, Role: role, ID: id, Name: id, ClientVersion: "test"}); err != nil {
 		t.Fatal(err)
 	}
+	timer := time.AfterFunc(3*time.Second, func() { _ = client.Close() })
+	defer timer.Stop()
 	for {
-		env, _, e := pc.Recv()
-		if e != nil {
-			t.Fatal(e)
+		env, raw, err := pc.Recv()
+		if err != nil {
+			t.Fatal(err)
 		}
 		if env.Type == proto.TypeHelloOK {
-			break
+			return pc, ch
+		}
+		if env.Type == proto.TypeError {
+			t.Fatalf("hello rejected: %s", raw)
 		}
 	}
-	return pc, ch
-}
-func publishTestPort(t *testing.T, pc *proto.Conn, port int) {
-	t.Helper()
-	if err := pc.Send(proto.Publish{V: proto.Version, Type: proto.TypePublish, Tunnels: []proto.TunnelSpec{{TunnelID: "test", Name: "test", SrcPort: 1, RemotePort: port}}}); err != nil {
-		t.Fatal(err)
-	}
-	for {
-		env, _, e := pc.Recv()
-		if e != nil {
-			t.Fatal(e)
-		}
-		if env.Type == proto.TypeRegistry {
-			continue
-		}
-		if env.Type != proto.TypePublishOK {
-			t.Fatalf("publish response %s", env.Type)
-		}
-		return
-	}
-}
-
-// TestForwardedTCPIPAddrMatching 验证服务端回送 forwarded-tcpip 时填写的地址
-// 能被 Exporter 的 x/crypto/ssh 客户端匹配到已注册的监听。
-// 匹配是按 "IP:端口" 字符串精确比对的（forwardList.forward）。若服务端回送的
-// Addr 与客户端 Listen 时用的地址写法不一致（如 "localhost" vs "127.0.0.1"，
-// 或 IPv4 与 IPv6 写法不同），OpenChannel 会被拒绝——症状是连接建立后**挂起**，
-// 请求发出去却永远收不到响应，且两侧日志都没有明显错误。
-// TestForwardedTCPIPAddrMatching verifies exact address matching between the
-// server's forwarded-tcpip channel and the x/crypto/ssh registered listener.
-func TestForwardedTCPIPAddrMatching(t *testing.T) {
-	addr, keyPath := startServer(t)
-
-	expClient := dialWith(t, addr, keyPath)
-
-	// 与 tunnel.serveExport 完全一致的调用方式。
-	// Invoke it exactly as tunnel.serveExport does.
-	remoteLn, err := expClient.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("请求远程转发: %v", err)
-	}
-	defer remoteLn.Close()
-
-	remotePort := remoteLn.Addr().(*net.TCPAddr).Port
-	t.Logf("Exporter 注册的监听地址: %s", remoteLn.Addr())
-
-	accepted := make(chan error, 1)
-	go func() {
-		c, err := remoteLn.Accept()
-		if err != nil {
-			accepted <- err
-			return
-		}
-		defer c.Close()
-		// 立即回一段数据，证明回送通道确实建立并可传输。
-		// Reply immediately to prove the returned channel carries data.
-		c.Write([]byte("PONG"))
-		accepted <- nil
-	}()
-
-	// 直接从服务端本机连转发端口，模拟"服务端 curl 34707 能通"的场景。
-	// Connect locally to the forwarded port, like running curl on the server.
-	probe, err := net.DialTimeout("tcp",
-		fmt.Sprintf("127.0.0.1:%d", remotePort), 5*time.Second)
-	if err != nil {
-		t.Fatalf("连接转发端口: %v", err)
-	}
-	defer probe.Close()
-
-	select {
-	case err := <-accepted:
-		if err != nil {
-			t.Fatalf("Exporter 未能接受回送连接: %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Exporter 未在超时内收到回送连接——" +
-			"服务端的 forwarded-tcpip 地址很可能与客户端注册的监听不匹配")
-	}
-
-	probe.SetDeadline(time.Now().Add(5 * time.Second))
-	buf := make([]byte, 4)
-	if _, err := io.ReadFull(probe, buf); err != nil {
-		t.Fatalf("读取回送数据失败: %v", err)
-	}
-	if string(buf) != "PONG" {
-		t.Errorf("收到 %q, 期望 PONG", buf)
-	}
-	t.Log("回送通道正常，地址匹配无误")
 }
 
 func dialWith(t *testing.T, addr, keyPath string) *ssh.Client {
 	t.Helper()
-
 	data, err := os.ReadFile(keyPath)
 	if err != nil {
-		t.Fatalf("读取密钥: %v", err)
+		t.Fatal(err)
 	}
 	signer, err := ssh.ParsePrivateKey(data)
 	if err != nil {
-		t.Fatalf("解析密钥: %v", err)
+		t.Fatal(err)
 	}
-
-	c, err := ssh.Dial("tcp", addr, &ssh.ClientConfig{
-		User:            "test",
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-		Timeout:         5 * time.Second,
-	})
+	client, err := ssh.Dial("tcp", addr, &ssh.ClientConfig{User: "test", Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)}, HostKeyCallback: ssh.InsecureIgnoreHostKey(), Timeout: 5 * time.Second})
 	if err != nil {
-		t.Fatalf("SSH 连接失败: %v", err)
+		t.Fatal(err)
 	}
-	t.Cleanup(func() { c.Close() })
-	return c
+	t.Cleanup(func() { _ = client.Close() })
+	return client
 }

@@ -74,7 +74,7 @@ func (m *Manager) RemoveTunnels(indices []int) error {
 	// 的错位状态。
 	// Save only once. Per-item saves are slower and can leave memory and disk out of
 	// sync if a save fails midway.
-	if err := m.cfg.Save(); err != nil {
+	if err := m.saveConfig(); err != nil {
 		return fmt.Errorf("保存配置: %w", err)
 	}
 
@@ -134,7 +134,7 @@ func (m *Manager) AddTunnels(tcs []config.Tunnel) error {
 	ctx, conn, ctrl := m.runCtx, m.conn, m.ctrl
 	m.mu.Unlock()
 
-	if err := m.cfg.Save(); err != nil {
+	if err := m.saveConfig(); err != nil {
 		return fmt.Errorf("保存配置: %w", err)
 	}
 	m.log.Infof("app", "已添加 %d 条隧道", len(added))

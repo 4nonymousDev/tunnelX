@@ -35,7 +35,7 @@ func TestGenerateKeyEmbedsRequestedMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if metadata.Username != "alice" || metadata.Email != "alice@example.com" || metadata.ComputerName == "" {
+	if metadata.Username != "alice" || metadata.Email != "alice@example.com" || metadata.ComputerName != "" {
 		t.Fatalf("metadata=%#v", metadata)
 	}
 	data, err := os.ReadFile(result.PubPath)

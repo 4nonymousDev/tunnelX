@@ -48,6 +48,9 @@ func (h *eventHub) subscribe() (<-chan Event, func(), bool) {
 	if h.closed {
 		return nil, func() {}, false
 	}
+	if len(h.subs) >= 16 {
+		return nil, func() {}, false
+	}
 	h.next++
 	id := h.next
 	ch := make(chan Event, 16)

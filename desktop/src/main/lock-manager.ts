@@ -18,6 +18,10 @@ interface StoredLockState {
 
 export class InterfaceLockManager {
   private state: StoredLockState | undefined
+  private initialized = false
+  private changing = false
+  private failedAttempts = 0
+  private nextAttemptAt = 0
 
   constructor(private readonly filePath: string) {}
 
@@ -25,9 +29,15 @@ export class InterfaceLockManager {
     try {
       const parsed = JSON.parse(await readFile(this.filePath, 'utf8')) as unknown
       this.state = storedState(parsed)
-    } catch {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('无法读取界面锁，请恢复锁文件后重试。')
       this.state = undefined
     }
+    this.initialized = true
+  }
+
+  assertUnlocked(): void {
+    if (!this.initialized || this.state?.locked || this.changing) throw new Error('界面已锁定，请先解锁。')
   }
 
   getState(): InterfaceLockState {
@@ -38,7 +48,10 @@ export class InterfaceLockManager {
   }
 
   async lock(password: string): Promise<InterfaceLockState> {
+    this.assertUnlocked()
     validatePassword(password)
+    this.changing = true
+    try {
     const salt = randomBytes(16)
     const nextState: StoredLockState = {
       version: FILE_VERSION,
@@ -49,23 +62,32 @@ export class InterfaceLockManager {
     await this.persist(nextState)
     this.state = nextState
     return this.getState()
+    } finally { this.changing = false }
   }
 
   async unlock(password: string): Promise<InterfaceLockState> {
+    if (!this.initialized || this.changing) throw new Error('锁定状态尚未就绪')
+    if (Date.now() < this.nextAttemptAt) throw new Error('密码错误次数过多，请稍后重试')
     validatePassword(password)
     if (!this.state) throw new Error('尚未设置锁定密码')
-
+    this.changing = true
+    try {
     const salt = Buffer.from(this.state.salt, 'base64')
     const expected = Buffer.from(this.state.verifier, 'base64')
     const actual = derive(password, salt)
     if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
+      this.failedAttempts += 1
+      this.nextAttemptAt = Date.now() + Math.min(30_000, 500 * 2 ** Math.min(this.failedAttempts, 6))
       throw new Error('密码错误，请重试')
     }
 
     const nextState = { ...this.state, locked: false }
     await this.persist(nextState)
     this.state = nextState
+    this.failedAttempts = 0
+    this.nextAttemptAt = 0
     return this.getState()
+    } finally { this.changing = false }
   }
 
   private async persist(state: StoredLockState): Promise<void> {

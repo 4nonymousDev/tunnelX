@@ -46,6 +46,19 @@ type adminBackend Server
 func (b *adminBackend) Overview(ctx context.Context) (adminapi.Overview, error) {
 	s := (*Server)(b)
 	var o adminapi.Overview
+	if s.store.CommitUncertain() {
+		o.StorageStatus = "commit_uncertain"
+		return o, nil
+	}
+	o.StorageHealthy = true
+	o.StorageStatus = "healthy"
+	if err := s.store.AdmissionError(ctx); err != nil {
+		o.StorageHealthy = false
+		o.StorageStatus = "new_work_paused"
+	} else if s.store.MaintenanceError() != "" {
+		o.StorageHealthy = false
+		o.StorageStatus = "maintenance_failed"
+	}
 	for _, x := range s.sessions.Snapshot() {
 		if x.State != session.Online {
 			continue
@@ -97,29 +110,42 @@ func (b *adminBackend) GetSession(_ context.Context, id string) (adminapi.Sessio
 	}
 	return sessionDTO(x), nil
 }
-func (s *Server) action(target, kind, reason, result, errText string) store.AdminAction {
+func (s *Server) action(ctx context.Context, target, kind, reason, result, errText string) store.AdminAction {
 	targetType := "client"
 	if kind == "disconnect" {
 		targetType = "session"
 	}
-	peer, _, err := net.SplitHostPort(s.cfg.AdminAddr)
-	if err != nil || peer == "" {
-		peer = "127.0.0.1"
+	meta := adminapi.RequestMetadata(ctx)
+	peer := meta.RemoteAddr
+	var sourceIP *string
+	if host, _, err := net.SplitHostPort(peer); err == nil {
+		sourceIP = &host
 	}
-	return store.AdminAction{Action: kind, TargetType: targetType, TargetID: target, Reason: reason, Result: result, Error: errText, Operator: "admin-token", TransportPeer: peer, CreatedAt: time.Now()}
+	operator := meta.Operator
+	if operator == "" {
+		operator = "server"
+	}
+	return store.AdminAction{Action: kind, TargetType: targetType, TargetID: target, Reason: reason, Result: result, Error: errText, Operator: operator, TransportPeer: peer, SourceIP: sourceIP, CreatedAt: time.Now()}
 }
 func (b *adminBackend) DisconnectSession(ctx context.Context, id, reason string) error {
 	s := (*Server)(b)
+	op, err := s.store.BeginAdminOperation(ctx, s.action(ctx, id, "disconnect", reason, "pending", ""))
+	if err != nil {
+		return err
+	}
 	ok := s.sessions.Disconnect(id, reason)
-	result := "success"
+	result := "applied"
 	errText := ""
 	if !ok {
 		result = "failed"
 		errText = "session not found"
 	}
-	e := s.store.RecordAdminAction(ctx, s.action(id, "disconnect", reason, result, errText))
+	finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	e := s.store.CompleteAdminOperation(finishCtx, op, result, errText)
 	if e != nil {
-		return e
+		s.store.MarkAdminOperationUncertain(op)
+		return &adminapi.PendingOperationError{ID: op}
 	}
 	s.notifyAudit(0)
 	if !ok {
@@ -128,23 +154,28 @@ func (b *adminBackend) DisconnectSession(ctx context.Context, id, reason string)
 	return nil
 }
 func clientDTO(s *Server, c store.Client) adminapi.Client {
-	x := adminapi.Client{Fingerprint: c.Fingerprint, Note: c.Note, Username: c.Username, Email: c.Email, ComputerName: c.ComputerName, FirstSeenAt: c.FirstSeenAt, LastSeenAt: c.LastSeenAt, LastIP: c.LastIP, LastClientID: c.LastClientID, LastReportedName: c.LastReportedName, LastRole: c.LastRole, LastVersion: c.LastVersion, Authorized: s.auth.AuthorizedFingerprint(c.Fingerprint), Blocked: s.policy.Blocked(c.Fingerprint)}
+	x := adminapi.Client{Fingerprint: c.Fingerprint, Note: c.Note, Username: c.Username, Email: c.Email, ComputerName: c.ComputerName, FirstSeenAt: c.FirstSeenAt, LastSeenAt: c.LastSeenAt, LastIP: c.LastIP, LastClientID: c.LastClientID, LastReportedName: c.LastReportedName, LastRole: c.LastRole, LastVersion: c.LastVersion, Authorized: s.fingerprintAuthorized(c.Fingerprint), Blocked: s.policy.Blocked(c.Fingerprint)}
 	for _, v := range s.sessions.Snapshot() {
 		if v.Fingerprint == c.Fingerprint {
 			x.ActiveSessionCount++
 		}
 	}
 	x.Online = x.ActiveSessionCount > 0
-	x.EffectiveAccess = x.Authorized && !x.Blocked
+	x.IdentityVerified = c.HasActiveIdentity
+	x.EffectiveAccess = x.Authorized && !x.Blocked && x.IdentityVerified
 	return x
 }
 
 func (b *adminBackend) ImportPublicKey(ctx context.Context, r adminapi.ImportPublicKeyRequest) (adminapi.ImportPublicKeyResult, error) {
 	s := (*Server)(b)
-	key, comment, _, rest, err := ssh.ParseAuthorizedKey([]byte(strings.TrimSpace(r.PublicKey)))
-	if err != nil || len(bytes.TrimSpace(rest)) != 0 {
+	r.ClientID = strings.TrimSpace(r.ClientID)
+	if !store.ValidClientID(r.ClientID) {
+		return adminapi.ImportPublicKeyResult{}, &adminapi.BackendError{Code: "invalid_client_id", Message: "a valid original device ID is required"}
+	}
+	key, comment, options, rest, err := ssh.ParseAuthorizedKey([]byte(strings.TrimSpace(r.PublicKey)))
+	if err != nil || len(bytes.TrimSpace(rest)) != 0 || len(options) != 0 {
 		if err == nil {
-			err = errors.New("multiple public keys are not allowed")
+			err = errors.New("multiple public keys and authorized_keys options are not allowed")
 		}
 		return adminapi.ImportPublicKeyResult{}, &adminapi.BackendError{Code: "invalid_public_key", Message: err.Error()}
 	}
@@ -160,27 +191,54 @@ func (b *adminBackend) ImportPublicKey(ctx context.Context, r adminapi.ImportPub
 		return adminapi.ImportPublicKeyResult{}, &adminapi.BackendError{Code: "invalid_key_metadata", Message: err.Error()}
 	}
 	fp := ssh.FingerprintSHA256(key)
-	if err = s.store.ImportClient(ctx, fp, metadata.Username, metadata.Email, metadata.ComputerName, time.Now()); err == nil {
-		_, err = s.auth.Import(r.PublicKey, canonicalComment)
-	}
-	result, errText := "success", ""
-	if err != nil {
-		result, errText = "failed", err.Error()
-	}
-	if auditErr := s.store.RecordAdminAction(ctx, s.action(fp, "import_public_key", r.Reason, result, errText)); auditErr != nil {
-		return adminapi.ImportPublicKeyResult{}, auditErr
+	err = s.policy.PersistChange(fp, func() error {
+		// Check conflicts and persist intent before changing the authorization
+		// file. Management changes are serialized through the policy writer.
+		op, beginErr := s.store.BeginClientRegistration(ctx, r.ClientID, fp, s.action(ctx, fp, "register_client", r.Reason, "pending", ""))
+		if beginErr != nil {
+			if errors.Is(beginErr, store.ErrIdentityMismatch) || errors.Is(beginErr, store.ErrIdentityRevoked) || errors.Is(beginErr, store.ErrIdentityConflict) {
+				return adminapi.ErrConflict
+			}
+			return beginErr
+		}
+		finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_, applyErr := s.auth.Import(r.PublicKey, canonicalComment)
+		if applyErr == nil || errors.Is(applyErr, errAuthorizedKeyExists) {
+			// Metadata, binding and successful audit commit together. A known
+			// public key can acquire its missing binding through this same form.
+			applyErr = s.store.CompleteClientRegistration(finishCtx, op, r.ClientID, fp, metadata.Username, metadata.Email, metadata.ComputerName)
+		}
+		if applyErr == nil {
+			return nil
+		}
+		if errors.Is(applyErr, store.ErrCommitOutcomeUnknown) {
+			s.store.MarkAdminOperationUncertain(op)
+			return applyErr // Keep the policy gate fail-closed on an uncertain commit.
+		}
+		// File replacement and SQLite cannot share a transaction. An interrupted
+		// registration is recoverable, but must never be reported as success.
+		if auditErr := s.store.CompleteAdminOperation(finishCtx, op, "needs_reconcile", applyErr.Error()); auditErr != nil {
+			s.store.MarkAdminOperationUncertain(op)
+			if errors.Is(auditErr, store.ErrCommitOutcomeUnknown) {
+				return auditErr
+			}
+		}
+		return &adminapi.PendingOperationError{ID: op}
+	}, nil)
+	if errors.Is(err, store.ErrCommitOutcomeUnknown) {
+		for _, removal := range s.sessions.RemoveFingerprint(fp, "authorization_commit_uncertain") {
+			removal.Close()
+		}
 	}
 	s.notifyAudit(0)
-	if errors.Is(err, errAuthorizedKeyExists) {
-		return adminapi.ImportPublicKeyResult{}, adminapi.ErrConflict
-	}
 	if err != nil {
 		return adminapi.ImportPublicKeyResult{}, err
 	}
 	if s.adminAPI != nil {
 		s.adminAPI.Publish("clients.changed", map[string]string{"fingerprint": fp})
 	}
-	return adminapi.ImportPublicKeyResult{Fingerprint: fp, Username: metadata.Username, Email: metadata.Email, ComputerName: metadata.ComputerName}, nil
+	return adminapi.ImportPublicKeyResult{ClientID: r.ClientID, Fingerprint: fp, Username: metadata.Username, Email: metadata.Email, ComputerName: metadata.ComputerName}, nil
 }
 func (b *adminBackend) ListClients(ctx context.Context, q adminapi.ListQuery) (adminapi.Page[adminapi.Client], error) {
 	s := (*Server)(b)
@@ -229,17 +287,7 @@ func (b *adminBackend) GetClient(ctx context.Context, fp string) (adminapi.Clien
 }
 func (b *adminBackend) UpdateClientNote(ctx context.Context, fp, note, reason string) error {
 	s := (*Server)(b)
-	e := s.store.UpdateClientNote(ctx, fp, note)
-	result := "success"
-	errText := ""
-	if e != nil {
-		result = "failed"
-		errText = e.Error()
-	}
-	ae := s.store.RecordAdminAction(ctx, s.action(fp, "update_note", reason, result, errText))
-	if ae != nil {
-		return ae
-	}
+	e := s.store.UpdateClientNoteAudited(ctx, fp, note, s.action(ctx, fp, "update_note", reason, "success", ""))
 	s.notifyAudit(0)
 	if e == nil && s.adminAPI != nil {
 		s.adminAPI.Publish("clients.changed", map[string]string{"fingerprint": fp})
@@ -252,19 +300,23 @@ func (b *adminBackend) UpdateClientNote(ctx context.Context, fp, note, reason st
 func (b *adminBackend) BlockClient(ctx context.Context, fp string, r adminapi.BlockRequest) error {
 	s := (*Server)(b)
 	var removals []*session.Removal
-	err := s.policy.Change(func(snapshot *policy.Snapshot) error {
-		now := time.Now().UTC()
-		a := s.action(fp, "block", r.Reason, "success", "")
-		e := s.store.Block(ctx, store.BlockRequest{Entry: store.BlacklistEntry{Fingerprint: fp, Reason: r.Reason, Operator: "admin-token", CreatedAt: now, ExpiresAt: r.ExpiresAt}, Action: a})
+	now := time.Now().UTC()
+	a := s.action(ctx, fp, "block", r.Reason, "success", "")
+	err := s.policy.PersistChange(fp, func() error {
+		e := s.store.Block(ctx, store.BlockRequest{Entry: store.BlacklistEntry{Fingerprint: fp, Reason: r.Reason, Operator: a.Operator, CreatedAt: now, ExpiresAt: r.ExpiresAt}, Action: a})
 		if e != nil {
-			_ = s.store.RecordAdminAction(ctx, s.action(fp, "block", r.Reason, "failed", e.Error()))
+			_ = s.store.RecordAdminAction(ctx, s.action(ctx, fp, "block", r.Reason, "failed", e.Error()))
 			s.notifyAudit(0)
 			return e
 		}
-		snapshot.Set(policy.Block{Fingerprint: fp, Reason: r.Reason, Operator: "admin-token", CreatedAt: now, ExpiresAt: r.ExpiresAt})
-		removals = s.sessions.RemoveFingerprint(fp, "blocked")
 		return nil
+	}, func(snapshot *policy.Snapshot) {
+		snapshot.Set(policy.Block{Fingerprint: fp, Reason: r.Reason, Operator: a.Operator, CreatedAt: now, ExpiresAt: r.ExpiresAt})
+		removals = s.sessions.RemoveFingerprint(fp, "blocked")
 	})
+	if errors.Is(err, store.ErrCommitOutcomeUnknown) {
+		removals = append(removals, s.sessions.RemoveFingerprint(fp, "authorization_commit_uncertain")...)
+	}
 	for _, removal := range removals {
 		removal.Close()
 	}
@@ -278,20 +330,192 @@ func (b *adminBackend) BlockClient(ctx context.Context, fp string, r adminapi.Bl
 }
 func (b *adminBackend) UnblockClient(ctx context.Context, fp, reason string) error {
 	s := (*Server)(b)
-	return s.policy.Change(func(snapshot *policy.Snapshot) error {
-		e := s.store.Unblock(ctx, fp, s.action(fp, "unblock", reason, "success", ""))
+	err := s.policy.PersistChange(fp, func() error {
+		e := s.store.Unblock(ctx, fp, s.action(ctx, fp, "unblock", reason, "success", ""))
 		if e != nil {
-			_ = s.store.RecordAdminAction(ctx, s.action(fp, "unblock", reason, "failed", e.Error()))
+			_ = s.store.RecordAdminAction(ctx, s.action(ctx, fp, "unblock", reason, "failed", e.Error()))
 			s.notifyAudit(0)
 			return e
 		}
-		snapshot.Delete(fp)
 		if s.adminAPI != nil {
 			s.adminAPI.Publish("clients.changed", map[string]string{"fingerprint": fp})
 		}
 		s.notifyAudit(0)
 		return nil
+	}, func(snapshot *policy.Snapshot) { snapshot.Delete(fp) })
+	if errors.Is(err, store.ErrCommitOutcomeUnknown) {
+		for _, r := range s.sessions.RemoveFingerprint(fp, "authorization_commit_uncertain") {
+			r.Close()
+		}
+	}
+	return err
+}
+
+func identityBackendError(err error) error {
+	if errors.Is(err, store.ErrIdentityConflict) {
+		return adminapi.ErrConflict
+	}
+	if errors.Is(err, store.ErrIdentityUnbound) {
+		return adminapi.ErrNotFound
+	}
+	if errors.Is(err, store.ErrIdentityMismatch) {
+		return &adminapi.BackendError{Code: "invalid_identity", Message: "invalid client ID or public key fingerprint"}
+	}
+	return err
+}
+
+func (b *adminBackend) ListIdentities(ctx context.Context, fp string, limit int) ([]store.IdentityBinding, error) {
+	return (*Server)(b).store.ListIdentities(ctx, fp, limit)
+}
+func (b *adminBackend) GetIdentity(ctx context.Context, id string) (store.IdentityBinding, error) {
+	v, err := (*Server)(b).store.GetIdentity(ctx, id)
+	return v, identityBackendError(err)
+}
+func (b *adminBackend) ListIdentityClaims(ctx context.Context, fp string, limit int) ([]store.IdentityClaim, error) {
+	return (*Server)(b).store.ListIdentityClaims(ctx, fp, limit)
+}
+func (b *adminBackend) ListAdminOperations(ctx context.Context, limit int) ([]store.AdminOperation, error) {
+	return (*Server)(b).store.ListAdminOperations(ctx, limit)
+}
+
+func (b *adminBackend) BindIdentity(ctx context.Context, r adminapi.BindIdentityRequest) (store.IdentityBinding, error) {
+	s := (*Server)(b)
+	var bound store.IdentityBinding
+	var removals []*session.Removal
+	previous, err := s.store.GetIdentity(ctx, r.ClientID)
+	if err != nil && !errors.Is(err, store.ErrIdentityUnbound) {
+		return bound, identityBackendError(err)
+	}
+	if previous.Generation != r.ExpectedGeneration {
+		return bound, adminapi.ErrConflict
+	}
+	previousFingerprint := previous.Fingerprint
+	err = s.policy.PersistChanges([]string{previousFingerprint, r.Fingerprint}, func() error {
+		// Explicit administrator recovery may restore a revoked binding, but
+		// must preserve permanent account ownership. Business access separately
+		// checks account enabled state and the remembered credential generation.
+		device, lookupErr := s.store.AccountDeviceForKey(ctx, r.Fingerprint)
+		if lookupErr == nil {
+			if device.ClientID != r.ClientID {
+				return adminapi.ErrConflict
+			}
+		} else if !errors.Is(lookupErr, sql.ErrNoRows) {
+			return lookupErr
+		} else if !s.auth.AuthorizedFingerprint(r.Fingerprint) {
+			return &adminapi.BackendError{Code: "key_not_authorized", Message: "fingerprint must already be registered"}
+		}
+		bound, err = s.store.BindIdentity(ctx, r.ClientID, r.Fingerprint, r.ExpectedGeneration, s.action(ctx, r.ClientID, "bind_identity", r.Reason, "success", ""))
+		return err
+	}, func(_ *policy.Snapshot) {
+		if previousFingerprint != "" && previousFingerprint != r.Fingerprint {
+			removals = append(removals, s.sessions.RemoveFingerprint(previousFingerprint, "identity_rebound")...)
+		}
+		removals = append(removals, s.sessions.RemoveFingerprint(r.Fingerprint, "identity_updated")...)
 	})
+	if errors.Is(err, store.ErrCommitOutcomeUnknown) {
+		removals = append(removals, s.sessions.RemoveFingerprint(r.Fingerprint, "authorization_commit_uncertain")...)
+		if previousFingerprint != "" && previousFingerprint != r.Fingerprint {
+			removals = append(removals, s.sessions.RemoveFingerprint(previousFingerprint, "authorization_commit_uncertain")...)
+		}
+	}
+	for _, r := range removals {
+		r.Close()
+	}
+	if err == nil && s.adminAPI != nil {
+		s.adminAPI.Publish("clients.changed", nil)
+		s.notifyAudit(0)
+	}
+	return bound, identityBackendError(err)
+}
+
+func (b *adminBackend) RevokeIdentity(ctx context.Context, id string, generation int64, reason string) error {
+	s := (*Server)(b)
+	identity, err := s.store.GetIdentity(ctx, id)
+	if err != nil {
+		return identityBackendError(err)
+	}
+	var removals []*session.Removal
+	err = s.policy.PersistChange(identity.Fingerprint, func() error {
+		return s.store.RevokeIdentity(ctx, id, generation, s.action(ctx, id, "revoke_identity", reason, "success", ""))
+	}, func(_ *policy.Snapshot) {
+		removals = s.sessions.RemoveFingerprint(identity.Fingerprint, "identity_revoked")
+	})
+	if errors.Is(err, store.ErrCommitOutcomeUnknown) {
+		removals = append(removals, s.sessions.RemoveFingerprint(identity.Fingerprint, "authorization_commit_uncertain")...)
+	}
+	for _, r := range removals {
+		r.Close()
+	}
+	if err == nil && s.adminAPI != nil {
+		s.adminAPI.Publish("clients.changed", nil)
+		s.notifyAudit(0)
+	}
+	return identityBackendError(err)
+}
+
+// Reconciliation observes actual state; it never replays an authorization file.
+func (b *adminBackend) ReconcileAdminOperation(ctx context.Context, id, reason string) error {
+	s := (*Server)(b)
+	operations, err := s.store.ListAdminOperations(ctx, 200)
+	if err != nil {
+		return err
+	}
+	for _, op := range operations {
+		if op.ID != id {
+			continue
+		}
+		if op.State == "applied" || op.State == "failed" {
+			return nil
+		}
+		if op.State == "pending" {
+			return adminapi.ErrConflict
+		}
+		applied := false
+		switch op.Action {
+		case "register_client":
+			_, fp, parseErr := store.ParseClientRegistrationTarget(op.TargetID)
+			if parseErr != nil {
+				return adminapi.ErrConflict
+			}
+			err = s.policy.PersistChange(fp, func() error {
+				authorized, healthy := s.auth.FingerprintStatus(fp)
+				if !healthy {
+					return adminapi.ErrConflict
+				}
+				return s.store.ReconcileClientRegistration(ctx, id, authorized, s.action(ctx, id, "reconcile_operation", reason, "success", ""))
+			}, nil)
+			if errors.Is(err, store.ErrCommitOutcomeUnknown) {
+				for _, removal := range s.sessions.RemoveFingerprint(fp, "authorization_commit_uncertain") {
+					removal.Close()
+				}
+			}
+			if err == nil {
+				s.notifyAudit(0)
+			}
+			return identityBackendError(err)
+		case "import_public_key":
+			var healthy bool
+			applied, healthy = s.auth.FingerprintStatus(op.TargetID)
+			if !healthy {
+				return adminapi.ErrConflict
+			}
+		case "disconnect":
+			_, online := s.sessions.Get(op.TargetID)
+			applied = !online
+		default:
+			return adminapi.ErrConflict
+		}
+		state := "failed"
+		if applied {
+			state = "applied"
+		}
+		if err = s.store.ReconcileAdminOperation(ctx, id, state, "reconciled from current state: "+reason, s.action(ctx, id, "reconcile_operation", reason, "success", "")); err != nil {
+			return err
+		}
+		s.notifyAudit(0)
+		return nil
+	}
+	return adminapi.ErrNotFound
 }
 
 func older(t time.Time, id int64, c *adminapi.Cursor) bool {

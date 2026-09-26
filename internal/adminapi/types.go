@@ -17,6 +17,8 @@ var (
 )
 
 type Overview struct {
+	StorageHealthy  bool      `json:"storage_healthy"`
+	StorageStatus   string    `json:"storage_status"`
 	OnlineUsers     int       `json:"online_users"`
 	Importers       int       `json:"importers"`
 	ActiveExporters int       `json:"active_exporters"`
@@ -63,6 +65,7 @@ type Client struct {
 	Authorized         bool       `json:"authorized"`
 	Blocked            bool       `json:"blocked"`
 	EffectiveAccess    bool       `json:"effective_access"`
+	IdentityVerified   bool       `json:"identity_verified"`
 	BlockReason        string     `json:"block_reason,omitempty"`
 	BlockExpiresAt     *time.Time `json:"block_expires_at,omitempty"`
 }
@@ -121,10 +124,11 @@ type BlockRequest struct {
 }
 
 type ImportPublicKeyRequest struct {
-	PublicKey, Username, Email, ComputerName, Reason string
+	ClientID, PublicKey, Username, Email, ComputerName, Reason string
 }
 
 type ImportPublicKeyResult struct {
+	ClientID     string `json:"client_id"`
 	Fingerprint  string `json:"fingerprint"`
 	Username     string `json:"username"`
 	Email        string `json:"email"`

@@ -2,10 +2,13 @@ package logbuf
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
+
+	"tunnelx/internal/keyperm"
 )
 
 // 日志文件参数。
@@ -35,11 +38,24 @@ type FileSink struct {
 // NewFileSink 在指定路径创建日志文件（追加模式）。
 // NewFileSink opens or creates the specified log file in append mode.
 func NewFileSink(path string) (*FileSink, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("创建日志目录: %w", err)
 	}
 
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	for i := 1; i <= KeepFiles; i++ {
+		older := fmt.Sprintf("%s.%d", path, i)
+		if info, err := os.Lstat(older); err == nil {
+			if !info.Mode().IsRegular() {
+				return nil, fmt.Errorf("历史日志路径必须是普通文件")
+			}
+			if err := keyperm.Fix(older); err != nil {
+				return nil, err
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+	}
+	f, err := openPrivateLog(path)
 	if err != nil {
 		return nil, fmt.Errorf("打开日志文件 %s: %w", path, err)
 	}
@@ -103,7 +119,7 @@ func (s *FileSink) rotate() {
 	}
 	os.Rename(s.path, s.path+".1")
 
-	f, err := os.OpenFile(s.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := openPrivateLog(s.path)
 	if err != nil {
 		// 轮转失败则停止写入，但不影响程序运行——日志是辅助功能。
 		// Stop logging after a rotation failure without stopping the application.
@@ -113,6 +129,24 @@ func (s *FileSink) rotate() {
 	s.f = f
 	s.w = bufio.NewWriterSize(f, 16*1024)
 	s.size = 0
+}
+
+func openPrivateLog(path string) (*os.File, error) {
+	f, err := keyperm.Create(path)
+	if !errors.Is(err, os.ErrExist) {
+		return f, err
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("日志路径必须是普通文件")
+	}
+	if err := keyperm.Fix(path); err != nil {
+		return nil, err
+	}
+	return os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
 }
 
 // Close 刷新缓冲并关闭文件。

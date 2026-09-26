@@ -5,37 +5,34 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-	"unicode/utf8"
 
 	"golang.org/x/crypto/ssh"
 	"tunnelx/internal/adminapi"
 	"tunnelx/internal/policy"
 	"tunnelx/internal/proto"
-	"tunnelx/internal/registry"
 	"tunnelx/internal/session"
 	"tunnelx/internal/store"
 )
 
 type Config struct {
-	Addr, HostKeyPath, AuthorizedKeys, Version string
-	AdminAddr, AdminTokenFile, DataDir         string
-	AuditPath                                  string // legacy only; ignored when DataDir is set
-	HelloTimeout                               time.Duration
+	Addr, HostKeyPath, AuthorizedKeys, Version  string
+	AdminAddr, AdminTokenFile, DataDir          string
+	AuditPath                                   string // legacy only; ignored when DataDir is set
+	HelloTimeout                                time.Duration
+	HandshakeTimeout, WriteTimeout, OpenTimeout time.Duration
+	Limits                                      Limits
+	IdentityBindings                            map[string]string // explicit bindings for embedded instances without a Store
 }
 
 type Server struct {
 	cfg                     Config
-	reg                     *registry.Registry
 	sshCfg                  *ssh.ServerConfig
 	logf                    func(string, ...any)
 	auth                    *authKeys
@@ -48,13 +45,19 @@ type Server struct {
 	mu                      sync.Mutex
 	listener, adminListener net.Listener
 	connections             map[net.Conn]struct{}
-	registryIDs             map[string]uint64
+	requestRates            map[*ssh.ServerConn]*rateBucket
 	auditIDs                map[string]int64
 	helloTimers             map[string]*time.Timer
 	closeOnce               sync.Once
 	closeErr                error
 	closing                 atomic.Bool
 	wg                      sync.WaitGroup
+	admission               *admission
+	logAfter                atomic.Int64
+	auditJobs               chan func(context.Context)
+	auditStop               chan struct{}
+	auditDone               chan struct{}
+	loginRates              loginLimiter
 }
 
 func New(cfg Config, logf func(string, ...any)) (*Server, error) {
@@ -64,6 +67,24 @@ func New(cfg Config, logf func(string, ...any)) (*Server, error) {
 	if cfg.HelloTimeout <= 0 {
 		cfg.HelloTimeout = 15 * time.Second
 	}
+	cfg.Limits.defaults()
+	if cfg.Limits.RegistryBytes > 3<<20 || cfg.Limits.PublishBytes > 3<<20 {
+		return nil, errors.New("控制消息预算不能超过 3 MiB")
+	}
+	if cfg.HandshakeTimeout <= 0 {
+		cfg.HandshakeTimeout = 10 * time.Second
+	}
+	if cfg.WriteTimeout <= 0 {
+		cfg.WriteTimeout = 10 * time.Second
+	}
+	if cfg.OpenTimeout <= 0 {
+		cfg.OpenTimeout = 10 * time.Second
+	}
+	bindings := map[string]string{}
+	for id, fp := range cfg.IdentityBindings {
+		bindings[id] = fp
+	}
+	cfg.IdentityBindings = bindings
 	hostKey, err := loadHostKey(cfg.HostKeyPath)
 	if err != nil {
 		return nil, err
@@ -72,7 +93,7 @@ func New(cfg Config, logf func(string, ...any)) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{cfg: cfg, reg: registry.New(), logf: logf, auth: authorized, connections: map[net.Conn]struct{}{}, registryIDs: map[string]uint64{}, auditIDs: map[string]int64{}, helloTimers: map[string]*time.Timer{}}
+	s := &Server{cfg: cfg, logf: logf, auth: authorized, connections: map[net.Conn]struct{}{}, auditIDs: map[string]int64{}, helloTimers: map[string]*time.Timer{}, admission: newAdmission(cfg.Limits), auditJobs: make(chan func(context.Context), 256), auditStop: make(chan struct{}), auditDone: make(chan struct{})}
 	if cfg.DataDir != "" {
 		if err = os.MkdirAll(cfg.DataDir, 0o700); err != nil {
 			return nil, fmt.Errorf("创建数据目录: %w", err)
@@ -103,8 +124,9 @@ func New(cfg Config, logf func(string, ...any)) (*Server, error) {
 		s.cleanupNew()
 		return nil, err
 	}
-	s.sessions = session.New(s.onSessionRemoved)
-	if cfg.AdminAddr != "" || cfg.AdminTokenFile != "" {
+	s.sessions = session.NewWithLimits(s.onSessionRemoved, cfg.Limits.sessions())
+	s.requestRates = make(map[*ssh.ServerConn]*rateBucket)
+	if cfg.AdminAddr != "" {
 		if cfg.DataDir == "" {
 			s.cleanupNew()
 			return nil, errors.New("管理端需要配置 data-dir")
@@ -113,33 +135,32 @@ func New(cfg Config, logf func(string, ...any)) (*Server, error) {
 			s.cleanupNew()
 			return nil, err
 		}
-		token, e := readAdminToken(cfg.AdminTokenFile)
-		if e != nil {
-			s.cleanupNew()
-			return nil, e
-		}
-		s.adminAPI, e = adminapi.New((*adminBackend)(s), token)
+		var e error
+		s.adminAPI, e = adminapi.New((*adminBackend)(s), s.store)
 		if e != nil {
 			s.cleanupNew()
 			return nil, e
 		}
 		s.adminSrv = &http.Server{Handler: adminTimeoutHandler(s.adminAPI), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	}
-	s.sshCfg = &ssh.ServerConfig{PublicKeyCallback: func(c ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+	s.sshCfg = &ssh.ServerConfig{MaxAuthTries: 3, PublicKeyCallback: func(c ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 		fp := ssh.FingerprintSHA256(key)
 		remote := remoteHost(c.RemoteAddr())
 		if s.policy.Blocked(fp) {
 			s.recordRejected(fp, remote, "blocked")
 			return nil, fmt.Errorf("公钥已被禁用: %s", fp)
 		}
-		if !authorized.Authorized(key) {
+		if !s.fingerprintAuthorized(fp) {
 			s.recordRejected(fp, remote, "rejected")
-			s.audit.write(auditEvent{Event: auditRejected, RemoteAddr: c.RemoteAddr().String(), User: c.User(), Fingerprint: fp, Reason: "公钥未被授权"})
 			return nil, fmt.Errorf("公钥未被授权: %s", fp)
 		}
 		return &ssh.Permissions{Extensions: map[string]string{"pubkey-fp": fp}}, nil
 	}}
+	if s.store != nil {
+		s.sshCfg.PasswordCallback = s.authenticateAccount
+	}
 	s.sshCfg.AddHostKey(hostKey)
+	go s.runAuditJobs()
 	return s, nil
 }
 
@@ -158,6 +179,11 @@ func (s *Server) ListenAndServe() error {
 			return fmt.Errorf("监听管理端 %s: %w", s.cfg.AdminAddr, e)
 		}
 		s.mu.Lock()
+		if s.closing.Load() {
+			s.mu.Unlock()
+			_ = ln.Close()
+			return net.ErrClosed
+		}
 		s.adminListener = ln
 		s.mu.Unlock()
 		go func() {
@@ -175,6 +201,11 @@ func (s *Server) ListenAndServe() error {
 		return fmt.Errorf("监听 %s: %w", s.cfg.Addr, err)
 	}
 	s.mu.Lock()
+	if s.closing.Load() {
+		s.mu.Unlock()
+		_ = ln.Close()
+		return net.ErrClosed
+	}
 	s.listener = ln
 	s.mu.Unlock()
 	s.logf("tunnel-server %s 已启动，监听 %s（%d 个授权公钥）", s.cfg.Version, ln.Addr(), s.auth.Count())
@@ -187,11 +218,23 @@ func (s *Server) ListenAndServe() error {
 			s.logf("接受连接失败: %v", e)
 			continue
 		}
+		finish, release, ok := s.admission.accept(raw)
+		if !ok {
+			_ = raw.Close()
+			s.recordRejected("", "", "capacity")
+			continue
+		}
 		s.mu.Lock()
+		if s.closing.Load() {
+			s.mu.Unlock()
+			release()
+			_ = raw.Close()
+			break
+		}
 		s.connections[raw] = struct{}{}
-		s.mu.Unlock()
 		s.wg.Add(1)
-		go func() { defer s.wg.Done(); s.handleConn(raw) }()
+		s.mu.Unlock()
+		go func() { defer s.wg.Done(); s.handleAdmitted(raw, finish, release) }()
 	}
 	s.wg.Wait()
 	return nil
@@ -220,11 +263,13 @@ func (s *Server) Close() error {
 		if s.adminAPI != nil {
 			_ = s.adminAPI.Close()
 		}
-		s.sessions.CloseAll("server_shutdown")
 		for _, c := range raws {
 			_ = c.Close()
 		}
+		s.sessions.CloseAll("server_shutdown")
 		s.wg.Wait()
+		close(s.auditStop)
+		<-s.auditDone
 		if s.audit != nil {
 			_ = s.audit.Close()
 		}
@@ -236,16 +281,45 @@ func (s *Server) Close() error {
 }
 
 func (s *Server) handleConn(raw net.Conn) {
-	defer func() { s.mu.Lock(); delete(s.connections, raw); s.mu.Unlock(); _ = raw.Close() }()
-	sshConn, chans, reqs, err := ssh.NewServerConn(raw, s.sshCfg)
-	if err != nil {
-		s.logf("握手失败 %s: %v", raw.RemoteAddr(), err)
+	finish, release, ok := s.admission.accept(raw)
+	if !ok {
+		_ = raw.Close()
 		return
 	}
+	s.handleAdmitted(raw, finish, release)
+}
+
+func (s *Server) handleAdmitted(raw net.Conn, finish, release func()) {
+	defer release()
+	defer func() { s.mu.Lock(); delete(s.connections, raw); s.mu.Unlock(); _ = raw.Close() }()
+	if err := raw.SetDeadline(time.Now().Add(s.cfg.HandshakeTimeout)); err != nil {
+		return
+	}
+	sshConn, chans, reqs, err := ssh.NewServerConn(raw, s.sshCfg)
+	finish()
+	if err != nil {
+		s.recordRejected("", "", "handshake")
+		return
+	}
+	_ = raw.SetDeadline(time.Time{})
+	defer sshConn.Close()
+	if sshConn.Permissions.Extensions["auth-mode"] == "account-enrollment" {
+		s.serveEnrollment(raw, sshConn, chans, reqs)
+		return
+	}
+	rate := newBucket(20, 40)
+	s.mu.Lock()
+	s.requestRates[sshConn] = rate
+	s.mu.Unlock()
+	defer func() { s.mu.Lock(); delete(s.requestRates, sshConn); s.mu.Unlock() }()
 	fp := sshConn.Permissions.Extensions["pubkey-fp"]
 	remote := remoteHost(sshConn.RemoteAddr())
+	version := s.policy.Version()
+	if fp == "" || !s.fingerprintAuthorized(fp) {
+		return
+	}
 	var sess *session.Session
-	admitted, err := s.policy.Admit(fp, func() error {
+	admitted, err := s.policy.AdmitVersion(fp, version, func() error {
 		var e error
 		sess, e = s.sessions.AddAuthenticated(session.Authenticated{Fingerprint: fp, RemoteIP: remote, ConnectedAt: time.Now().UTC(), Closer: sshConn})
 		return e
@@ -255,23 +329,37 @@ func (s *Server) handleConn(raw net.Conn) {
 		s.recordRejected(fp, remote, "blocked")
 		return
 	}
-	s.startHelloTimer(sess.ID)
+	defer s.sessions.Disconnect(sess.ID, "disconnected")
 	if s.adminAPI != nil {
 		s.adminAPI.Publish("sessions.changed", map[string]any{"session_id": sess.ID})
 	}
 	if s.store != nil {
 		id := sess.ID
-		row, e := s.store.StartConnection(context.Background(), store.ConnectionAudit{SessionID: &id, Fingerprint: fp, RemoteIP: remote, AuthenticatedAt: sess.ConnectedAt, Result: "authenticated"})
+		ctx, cancel := s.dbContext()
+		row, e := s.store.StartConnection(ctx, store.ConnectionAudit{SessionID: &id, Fingerprint: fp, RemoteIP: remote, AuthenticatedAt: sess.ConnectedAt, Result: "authenticated"})
+		cancel()
 		if e != nil {
-			s.logf("记录连接审计失败: %v", e)
+			s.limitedLog("记录连接审计失败: %v", e)
 			s.sessions.Disconnect(sess.ID, "audit_failed")
 			return
 		}
 		s.mu.Lock()
-		s.auditIDs[sess.ID] = row
+		_, live := s.sessions.Get(sess.ID)
+		if live {
+			s.auditIDs[sess.ID] = row
+		}
 		s.mu.Unlock()
+		if !live {
+			s.queueAudit(func(ctx context.Context) {
+				_ = s.store.FinishConnection(ctx, row, "disconnected", "admission_cancelled", time.Now())
+			})
+			return
+		}
 		s.notifyAudit(row)
-		if e = s.store.UpsertClient(context.Background(), store.Seen{Fingerprint: fp, IP: remote, At: sess.ConnectedAt}); e != nil {
+		ctx, cancel = s.dbContext()
+		e = s.store.UpsertClient(ctx, store.Seen{Fingerprint: fp, IP: remote, At: sess.ConnectedAt})
+		cancel()
+		if e != nil {
 			s.sessions.Disconnect(sess.ID, "client_store_failed")
 			return
 		}
@@ -279,401 +367,58 @@ func (s *Server) handleConn(raw net.Conn) {
 			s.adminAPI.Publish("clients.changed", map[string]string{"fingerprint": fp})
 		}
 	}
+	s.startHelloTimer(sess.ID)
 	s.audit.write(auditEvent{Event: auditConnect, RemoteAddr: remote, User: sshConn.User(), Fingerprint: fp})
-	go s.handleGlobalRequests(sshConn, sess.ID, reqs)
 	var channels sync.WaitGroup
+	channels.Add(1)
+	go func() { defer channels.Done(); s.discardRequests(sshConn, reqs, rate) }()
 	for newCh := range chans {
+		if !rate.allow() {
+			_ = sshConn.Close()
+			break
+		}
 		switch newCh.ChannelType() {
 		case proto.ChannelType:
 			if e := s.sessions.BeginControl(sess.ID); e != nil {
-				_ = newCh.Reject(ssh.Prohibited, "仅允许一个控制通道")
+				s.rejectChannel(sshConn, newCh, ssh.Prohibited, "仅允许一个控制通道")
 				continue
 			}
-			ch, chReqs, e := newCh.Accept()
+			ch, chReqs, e := s.acceptChannel(sshConn, newCh)
 			if e != nil {
+				_ = sshConn.Close()
 				continue
 			}
-			go ssh.DiscardRequests(chReqs)
+			channels.Add(2)
+			go func() { defer channels.Done(); s.discardRequests(sshConn, chReqs, rate) }()
+			go func() {
+				defer channels.Done()
+				defer s.sessions.Disconnect(sess.ID, "control_closed")
+				s.serveControl(sess.ID, sshConn, ch, rate)
+			}()
+		case proto.OpenChannelType:
+			target, e := proto.DecodeOpen(newCh.ExtraData())
+			if e != nil {
+				s.rejectChannel(sshConn, newCh, ssh.Prohibited, "目标无效")
+				continue
+			}
+			lease, e := s.acquire(sess.ID, target)
+			if e != nil {
+				s.rejectChannel(sshConn, newCh, ssh.Prohibited, "目标已改变、未授权或容量已满")
+				continue
+			}
 			channels.Add(1)
-			go func() { defer channels.Done(); defer ch.Close(); s.serveControl(sess.ID, ch) }()
-		case "direct-tcpip":
-			channels.Add(1)
-			go func(n ssh.NewChannel) { defer channels.Done(); s.handleDirectTCPIP(sess.ID, n) }(newCh)
+			go func(n ssh.NewChannel, l *session.Lease) { defer channels.Done(); s.forward(sshConn, n, l, rate) }(newCh, lease)
 		default:
-			_ = newCh.Reject(ssh.UnknownChannelType, fmt.Sprintf("不支持的 channel 类型: %s", newCh.ChannelType()))
+			s.rejectChannel(sshConn, newCh, ssh.UnknownChannelType, "不支持的 channel 类型")
 		}
 	}
+	_ = sshConn.Close()
+	s.sessions.Disconnect(sess.ID, "connection_closed")
 	channels.Wait()
-	if r := s.sessions.Remove(sess.ID, "connection_closed"); r != nil {
-		r.Close()
-	}
-}
-
-type directTCPIPPayload struct {
-	DestAddr   string
-	DestPort   uint32
-	OriginAddr string
-	OriginPort uint32
-}
-
-func (s *Server) handleDirectTCPIP(visitorID string, newCh ssh.NewChannel) {
-	var p directTCPIPPayload
-	if ssh.Unmarshal(newCh.ExtraData(), &p) != nil {
-		_ = newCh.Reject(ssh.ConnectionFailed, "无法解析转发请求")
-		return
-	}
-	visitor, visitorOK := s.sessions.Get(visitorID)
-	owner, ok := s.sessions.LookupPublishedPort(int(p.DestPort))
-	if !visitorOK || visitor.State != session.Online || !isLoopback(p.DestAddr) || !ok {
-		s.startFailedAccess(visitor, owner, int(p.DestPort), "target_not_published")
-		_ = newCh.Reject(ssh.Prohibited, "目标端口未由在线 Exporter 发布")
-		return
-	}
-	auditID := int64(0)
-	if s.store != nil {
-		var auditErr error
-		auditID, auditErr = s.store.StartAccess(context.Background(), accessRecord(visitor, owner, "started", ""))
-		if auditErr != nil {
-			_ = newCh.Reject(ssh.ConnectionFailed, "无法记录访问审计")
-			return
-		}
-		s.notifyAudit(auditID)
-	}
-	target := fmt.Sprintf("127.0.0.1:%d", p.DestPort)
-	conn, err := net.DialTimeout("tcp", target, 10*time.Second)
-	if err != nil {
-		if auditID > 0 {
-			_ = s.store.FinishAccess(context.Background(), auditID, "failed", err.Error(), 0, 0, time.Now())
-			s.notifyAudit(auditID)
-		}
-		_ = newCh.Reject(ssh.ConnectionFailed, "目标已离线")
-		return
-	}
-	defer conn.Close()
-	ch, reqs, err := newCh.Accept()
-	if err != nil {
-		if auditID > 0 {
-			_ = s.store.FinishAccess(context.Background(), auditID, "failed", err.Error(), 0, 0, time.Now())
-			s.notifyAudit(auditID)
-		}
-		return
-	}
-	defer ch.Close()
-	go ssh.DiscardRequests(reqs)
-	var sent, received atomic.Int64
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		n, _ := io.Copy(conn, ch)
-		sent.Add(n)
-		if tc, ok := conn.(*net.TCPConn); ok {
-			_ = tc.CloseWrite()
-		}
-	}()
-	go func() { defer wg.Done(); n, _ := io.Copy(ch, conn); received.Add(n); _ = ch.CloseWrite() }()
-	wg.Wait()
-	if auditID > 0 {
-		_ = s.store.FinishAccess(context.Background(), auditID, "completed", "", sent.Load(), received.Load(), time.Now())
-		s.notifyAudit(auditID)
-	}
-}
-func accessRecord(v session.Session, f session.Forward, result, reason string) store.AccessAudit {
-	a := store.AccessAudit{VisitorSessionID: v.ID, VisitorFingerprint: v.Fingerprint, VisitorClientID: v.ClientID, TargetSessionID: f.SessionID, TargetFingerprint: f.Fingerprint, TargetClientID: f.ClientID, TargetRemotePort: f.Port, Result: result, Reason: reason}
-	if f.Tunnel != nil {
-		a.TargetTunnelID = f.Tunnel.ID
-		a.TargetTunnelName = f.Tunnel.Name
-	}
-	return a
-}
-func (s *Server) startFailedAccess(v session.Session, f session.Forward, port int, reason string) {
-	if s.store == nil {
-		return
-	}
-	f.Port = port
-	a := accessRecord(v, f, "failed", reason)
-	id, e := s.store.StartAccess(context.Background(), a)
-	if e == nil {
-		s.notifyAudit(id)
-		_ = s.store.FinishAccess(context.Background(), id, "failed", reason, 0, 0, time.Now())
-		s.notifyAudit(id)
-	}
-}
-func isLoopback(addr string) bool { ip := net.ParseIP(addr); return ip != nil && ip.IsLoopback() }
-func splitAddr(a net.Addr) (string, int) {
-	if tcp, ok := a.(*net.TCPAddr); ok {
-		return tcp.IP.String(), tcp.Port
-	}
-	return "127.0.0.1", 1
-}
-
-type forwardRequest struct {
-	Addr string
-	Port uint32
-}
-type forwardReply struct{ Port uint32 }
-
-func (s *Server) handleGlobalRequests(c *ssh.ServerConn, sid string, reqs <-chan *ssh.Request) {
-	for req := range reqs {
-		switch req.Type {
-		case "tcpip-forward":
-			s.handleForward(c, sid, req)
-		case "cancel-tcpip-forward":
-			var fr forwardRequest
-			if ssh.Unmarshal(req.Payload, &fr) != nil {
-				_ = req.Reply(false, nil)
-				continue
-			}
-			_, e := s.sessions.CancelForward(sid, int(fr.Port))
-			if e == nil {
-				s.removePublishedPort(sid, int(fr.Port))
-			}
-			_ = req.Reply(e == nil, nil)
-		default:
-			if req.WantReply {
-				_ = req.Reply(false, nil)
-			}
-		}
-	}
-}
-func (s *Server) handleForward(c *ssh.ServerConn, sid string, req *ssh.Request) {
-	var fr forwardRequest
-	if ssh.Unmarshal(req.Payload, &fr) != nil || fr.Port != 0 {
-		_ = req.Reply(false, nil)
-		return
-	}
-	ln, e := net.Listen("tcp", "127.0.0.1:0")
-	if e != nil {
-		_ = req.Reply(false, nil)
-		return
-	}
-	port := ln.Addr().(*net.TCPAddr).Port
-	if e = s.sessions.RegisterForward(sid, port, ln); e != nil {
-		_ = ln.Close()
-		_ = req.Reply(false, nil)
-		return
-	}
-	if req.WantReply {
-		_ = req.Reply(true, ssh.Marshal(forwardReply{Port: uint32(port)}))
-	}
-	go s.acceptForwarded(c, ln, port)
-}
-func (s *Server) acceptForwarded(c *ssh.ServerConn, ln net.Listener, port int) {
-	defer ln.Close()
-	for {
-		conn, e := ln.Accept()
-		if e != nil {
-			return
-		}
-		go s.forwardOne(c, conn, port)
-	}
-}
-
-func (s *Server) removePublishedPort(sid string, port int) {
-	current, ok := s.sessions.Get(sid)
-	if !ok {
-		return
-	}
-	tunnels := make([]session.Tunnel, 0, len(current.Tunnels))
-	registryTunnels := make([]proto.TunnelSpec, 0, len(current.Tunnels))
-	for _, tunnel := range current.Tunnels {
-		if tunnel.RemotePort == port {
-			continue
-		}
-		tunnels = append(tunnels, tunnel)
-		registryTunnels = append(registryTunnels, proto.TunnelSpec{
-			TunnelID: tunnel.ID, SrcHost: tunnel.SrcHost, SrcPort: tunnel.SrcPort,
-			RemotePort: tunnel.RemotePort, Name: tunnel.Name,
-		})
-	}
-	if len(tunnels) == len(current.Tunnels) {
-		return
-	}
-	_ = s.sessions.Publish(sid, tunnels)
-	s.reg.Publish(s.registryID(sid), registryTunnels)
-	if s.adminAPI != nil {
-		s.adminAPI.Publish("sessions.changed", map[string]any{"session_id": sid})
-	}
-}
-
-type forwardedTCPPayload struct {
-	Addr       string
-	Port       uint32
-	OriginAddr string
-	OriginPort uint32
-}
-
-func (s *Server) forwardOne(c *ssh.ServerConn, conn net.Conn, port int) {
-	defer conn.Close()
-	oa, op := splitAddr(conn.RemoteAddr())
-	ch, reqs, e := c.OpenChannel("forwarded-tcpip", ssh.Marshal(forwardedTCPPayload{Addr: "127.0.0.1", Port: uint32(port), OriginAddr: oa, OriginPort: uint32(op)}))
-	if e != nil {
-		return
-	}
-	defer ch.Close()
-	go ssh.DiscardRequests(reqs)
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() { defer wg.Done(); _, _ = io.Copy(ch, conn); _ = ch.CloseWrite() }()
-	go func() {
-		defer wg.Done()
-		_, _ = io.Copy(conn, ch)
-		if tc, ok := conn.(*net.TCPConn); ok {
-			_ = tc.CloseWrite()
-		}
-	}()
-	wg.Wait()
-}
-
-func (s *Server) serveControl(sid string, ch ssh.Channel) {
-	pc := proto.NewConn(ch)
-	_, ok := s.handshake(sid, pc)
-	if !ok {
-		s.sessions.Disconnect(sid, "hello_failed")
-		return
-	}
-	updates, unsub := s.reg.Subscribe()
-	defer unsub()
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		s.pushRegistry(pc)
-		for {
-			select {
-			case <-done:
-				return
-			case <-updates:
-				s.pushRegistry(pc)
-			}
-		}
-	}()
-	for {
-		env, raw, e := pc.Recv()
-		if e != nil {
-			return
-		}
-		switch env.Type {
-		case proto.TypePublish:
-			var p proto.Publish
-			if proto.Decode(raw, &p) != nil || !validTunnelSpecs(p.Tunnels) {
-				s.sendErr(pc, proto.CodeBadRequest, "无法解析上报内容")
-				continue
-			}
-			tunnels := make([]session.Tunnel, len(p.Tunnels))
-			for i, t := range p.Tunnels {
-				tunnels[i] = session.Tunnel{ID: t.TunnelID, Name: t.Name, SrcHost: t.SrcHost, SrcPort: t.SrcPort, RemotePort: t.RemotePort}
-			}
-			_ = s.sessions.Publish(sid, tunnels)
-			rid := s.registryID(sid)
-			s.reg.Publish(rid, p.Tunnels)
-			_ = pc.Send(proto.PublishOK{V: proto.Version, Type: proto.TypePublishOK})
-			if s.adminAPI != nil {
-				s.adminAPI.Publish("sessions.changed", map[string]any{"session_id": sid})
-			}
-		default:
-			s.sendErr(pc, proto.CodeBadRequest, "未知消息类型")
-		}
-	}
-}
-func (s *Server) handshake(sid string, pc *proto.Conn) (proto.Hello, bool) {
-	env, raw, e := pc.Recv()
-	if e != nil {
-		return proto.Hello{}, false
-	}
-	if env.Type != proto.TypeHello {
-		s.sendErr(pc, proto.CodeBadRequest, "首条消息必须是 hello")
-		return proto.Hello{}, false
-	}
-	if env.V != proto.Version {
-		s.sendErr(pc, proto.CodeVersionMismatch, "协议版本不兼容")
-		return proto.Hello{}, false
-	}
-	var h proto.Hello
-	if proto.Decode(raw, &h) != nil || !validHello(h) {
-		s.sendErr(pc, proto.CodeBadRequest, "hello 字段无效")
-		return h, false
-	}
-	if e = s.sessions.CompleteHello(sid, session.Hello{ClientID: h.ID, Name: h.Name, Role: h.Role, Version: h.ClientVersion}); e != nil {
-		if errors.Is(e, session.ErrDuplicateClient) {
-			s.sendErr(pc, proto.CodeDuplicateID, "该客户端标识已在线")
-		} else {
-			s.sendErr(pc, proto.CodeInternalError, "登记会话失败")
-		}
-		return h, false
-	}
-	s.cancelHelloTimer(sid)
-	rid, ok := s.reg.Join(h.ID, h.Name, h.ClientVersion, h.Role)
-	if !ok {
-		s.sendErr(pc, proto.CodeDuplicateID, "该客户端标识已在线")
-		return h, false
-	}
-	s.mu.Lock()
-	s.registryIDs[sid] = rid
-	auditID := s.auditIDs[sid]
-	s.mu.Unlock()
-	if s.store != nil {
-		now := time.Now().UTC()
-		if e = s.store.UpsertClient(context.Background(), store.Seen{Fingerprint: s.fingerprint(sid), ClientID: h.ID, ReportedName: h.Name, Role: h.Role, Version: h.ClientVersion, At: now}); e == nil {
-			e = s.store.CompleteHello(context.Background(), auditID, store.ConnectionAudit{ClientID: h.ID, HelloAt: &now, Result: "online", ReportedName: h.Name, Role: h.Role, Version: h.ClientVersion})
-		}
-		if e != nil {
-			s.reg.Leave(rid)
-			s.sendErr(pc, proto.CodeInternalError, "持久化会话失败")
-			return h, false
-		}
-		if s.adminAPI != nil {
-			s.adminAPI.Publish("clients.changed", map[string]string{"fingerprint": s.fingerprint(sid)})
-			s.notifyAudit(auditID)
-		}
-	}
-	if e = pc.Send(proto.HelloOK{V: proto.Version, Type: proto.TypeHelloOK, ServerVersion: s.cfg.Version}); e != nil {
-		s.reg.Leave(rid)
-		return h, false
-	}
-	if s.adminAPI != nil {
-		s.adminAPI.Publish("sessions.changed", map[string]any{"session_id": sid})
-	}
-	return h, true
-}
-func validHello(h proto.Hello) bool {
-	return strings.TrimSpace(h.ID) != "" && utf8.RuneCountInString(h.ID) <= 128 && utf8.RuneCountInString(h.Name) <= 200 && utf8.RuneCountInString(h.ClientVersion) <= 100 && (h.Role == proto.RoleExporter || h.Role == proto.RoleImporter)
-}
-
-func validTunnelSpecs(tunnels []proto.TunnelSpec) bool {
-	if len(tunnels) > 1000 {
-		return false
-	}
-	for _, tunnel := range tunnels {
-		if tunnel.SrcPort < 0 || tunnel.SrcPort > 65535 || tunnel.RemotePort < 1 || tunnel.RemotePort > 65535 {
-			return false
-		}
-		if utf8.RuneCountInString(tunnel.TunnelID) > 128 || utf8.RuneCountInString(tunnel.Name) > 200 || utf8.RuneCountInString(tunnel.SrcHost) > 255 {
-			return false
-		}
-	}
-	return true
-}
-func (s *Server) registryID(sid string) uint64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.registryIDs[sid]
-}
-func (s *Server) fingerprint(sid string) string { x, _ := s.sessions.Get(sid); return x.Fingerprint }
-func (s *Server) pushRegistry(pc *proto.Conn) {
-	entries := s.reg.Snapshot()
-	if entries == nil {
-		entries = []proto.RegistryEntry{}
-	}
-	_ = pc.Send(proto.Registry{V: proto.Version, Type: proto.TypeRegistry, Entries: entries})
-}
-func (s *Server) sendErr(pc *proto.Conn, code, msg string) {
-	_ = pc.Send(proto.Error{V: proto.Version, Type: proto.TypeError, Code: code, Msg: msg})
 }
 
 func (s *Server) onSessionRemoved(x session.Session, reason string) {
 	s.mu.Lock()
-	rid := s.registryIDs[x.ID]
-	delete(s.registryIDs, x.ID)
 	aid := s.auditIDs[x.ID]
 	delete(s.auditIDs, x.ID)
 	if timer := s.helloTimers[x.ID]; timer != nil {
@@ -681,12 +426,13 @@ func (s *Server) onSessionRemoved(x session.Session, reason string) {
 		delete(s.helloTimers, x.ID)
 	}
 	s.mu.Unlock()
-	if rid != 0 {
-		s.reg.Leave(rid)
-	}
 	if s.store != nil && aid != 0 {
-		_ = s.store.FinishConnection(context.Background(), aid, "disconnected", reason, time.Now())
-		s.notifyAudit(aid)
+		s.queueAudit(func(ctx context.Context) {
+			if err := s.store.FinishConnection(ctx, aid, "disconnected", reason, time.Now()); err != nil {
+				s.limitedLog("连接收尾审计失败: %v", err)
+			}
+			s.notifyAudit(aid)
+		})
 	}
 	if s.adminAPI != nil {
 		s.adminAPI.Publish("sessions.changed", map[string]any{"session_id": x.ID})
@@ -696,6 +442,10 @@ func (s *Server) onSessionRemoved(x session.Session, reason string) {
 
 func (s *Server) startHelloTimer(sid string) {
 	s.mu.Lock()
+	if _, ok := s.sessions.Get(sid); !ok {
+		s.mu.Unlock()
+		return
+	}
 	s.helloTimers[sid] = time.AfterFunc(s.cfg.HelloTimeout, func() {
 		s.mu.Lock()
 		_, ok := s.helloTimers[sid]
@@ -717,15 +467,6 @@ func (s *Server) cancelHelloTimer(sid string) {
 		delete(s.helloTimers, sid)
 	}
 	s.mu.Unlock()
-}
-func (s *Server) recordRejected(fp, remote, result string) {
-	if s.store == nil {
-		return
-	}
-	id, e := s.store.StartConnection(context.Background(), store.ConnectionAudit{Fingerprint: fp, RemoteIP: remote, AuthenticatedAt: time.Now(), Result: result, DisconnectReason: result})
-	if e == nil {
-		s.notifyAudit(id)
-	}
 }
 func (s *Server) notifyAudit(id int64) {
 	if s.adminAPI == nil {
@@ -770,36 +511,6 @@ func validateAdminAddr(a string) error {
 		return errors.New("管理监听地址必须是明确的 loopback IP")
 	}
 	return nil
-}
-func readAdminToken(p string) (string, error) {
-	if p == "" {
-		return "", errors.New("admin-token-file 不能为空")
-	}
-	info, e := os.Stat(p)
-	if e != nil {
-		return "", fmt.Errorf("读取管理 Token: %w", e)
-	}
-	if !info.Mode().IsRegular() {
-		return "", errors.New("管理 Token 必须是普通文件")
-	}
-	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
-		return "", fmt.Errorf("管理 Token 权限必须为 0600，当前为 %04o", info.Mode().Perm())
-	}
-	b, e := os.ReadFile(p)
-	if e != nil {
-		return "", e
-	}
-	token := strings.TrimSuffix(string(b), "\n")
-	token = strings.TrimSuffix(token, "\r")
-	if len(token) != 64 {
-		return "", errors.New("管理 Token 必须是 64 位十六进制文本")
-	}
-	for _, c := range token {
-		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
-			return "", errors.New("管理 Token 必须是 64 位十六进制文本")
-		}
-	}
-	return token, nil
 }
 func adminTimeoutHandler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

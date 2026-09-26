@@ -12,6 +12,7 @@ if (unexpectedRequires.length > 0) {
 
 for (const marker of [
   'exposeInMainWorld',
+  'tunnelx:login',
   'updateSettings',
   'tunnelx:settings:update',
   'generateKey',

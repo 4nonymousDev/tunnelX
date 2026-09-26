@@ -125,6 +125,40 @@ func TestEndToEndTunnel(t *testing.T) {
 	if got := string(buf2); got != second {
 		t.Errorf("二次往返得到 %q, 期望 %q", got, second)
 	}
+	// Re-publication must not strand an already running importer, and an old
+	// generation must never be accepted as a request for the new publication.
+	oldTarget, err := impCtrl.ResolveTarget("peer-uuid", "", expTun.Config().ID, echoPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.Close()
+	expTun.Stop()
+	waitRegistry(t, impCtrl, 0)
+	expTun.Start(ctx, expSSH, expCtrl, expCtrl)
+	waitState(t, expTun, tunnel.StateRunning)
+	waitRegistry(t, impCtrl, 1)
+	newTarget, err := impCtrl.ResolveTarget("peer-uuid", oldTarget.Fingerprint, oldTarget.TunnelID, echoPort)
+	if err != nil || newTarget.Generation == oldTarget.Generation {
+		t.Fatalf("generation was reused: %+v %v", newTarget, err)
+	}
+	oldPayload, _ := proto.EncodeOpen(oldTarget)
+	if ch, _, err := impSSH.OpenChannel(proto.OpenChannelType, oldPayload); err == nil {
+		ch.Close()
+		t.Fatal("old publication generation accepted")
+	}
+	again, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", listenPort), 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer again.Close()
+	_ = again.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err = again.Write([]byte("fresh")); err != nil {
+		t.Fatal(err)
+	}
+	buf2 = make([]byte, 5)
+	if _, err = io.ReadFull(again, buf2); err != nil || string(buf2) != "fresh" {
+		t.Fatalf("existing importer did not resolve fresh target: %q %v", buf2, err)
+	}
 }
 
 // TestImportPeerOffline 验证对端不在线时隧道进入"对端离线"状态而非报错。

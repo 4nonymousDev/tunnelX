@@ -5,8 +5,6 @@ package keyperm
 import (
 	"fmt"
 	"os"
-	"os/exec"
-	"strings"
 
 	"golang.org/x/sys/windows"
 )
@@ -84,42 +82,19 @@ func check(path string) Result {
 	return Result{OK: len(readers) == 0, Readers: readers}
 }
 
-// fix 调用 icacls 重建权限。
-// 用 icacls 而非直接操作 ACL API：这一串操作（重置、断继承、授权）用 API 实现
-// 需要构造 ACL 结构、处理继承标志，代码量与出错面都远大于三条命令；且 icacls
-// 是 Windows 内建组件，无外部依赖。
-// fix rebuilds permissions with icacls. Using the built-in tool keeps the reset,
-// inheritance, and grant sequence smaller and less error-prone than constructing ACLs directly.
+// Replace the DACL in one operation; never reset it to inherited broad access.
 func fix(path string) error {
-	self, err := currentUserName()
+	sd, err := privateDescriptor()
 	if err != nil {
 		return err
 	}
-
-	steps := []struct {
-		desc string
-		args []string
-	}{
-		// /reset 清除现有显式 ACE，回到仅继承状态
-		// /reset removes explicit ACEs and returns to inherited permissions only.
-		{"重置权限", []string{path, "/reset"}},
-		// /inheritance:r 断开继承并移除继承来的 ACE
-		// /inheritance:r disables inheritance and removes inherited ACEs.
-		{"断开权限继承", []string{path, "/inheritance:r"}},
-		// 仅授予当前用户与 SYSTEM 完全控制
-		// Grant full control only to the current user and SYSTEM.
-		{"授权当前用户", []string{path, "/grant:r", self + ":F"}},
-		{"授权 SYSTEM", []string{path, "/grant:r", "*S-1-5-18:F"}},
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		return err
 	}
-
-	for _, s := range steps {
-		cmd := exec.Command("icacls", s.args...)
-		cmd.SysProcAttr = hiddenWindow()
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("%s失败: %w (%s)", s.desc, err, strings.TrimSpace(string(out)))
-		}
-	}
-	return nil
+	return windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
+		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
+		nil, nil, dacl, nil)
 }
 
 func currentUserSID() (string, error) {

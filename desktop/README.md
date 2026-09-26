@@ -4,6 +4,14 @@
 
 基于 Electron、Vue 3 与 TypeScript 的 TunnelX 桌面界面。Electron 主进程只通过本机鉴权 API 与 `tunnelx-cli` 核心通信；渲染进程不包含 Node.js 能力，也无法读取控制令牌。
 
+## 账号登录
+
+管理员先在服务器管理页「账号管理 → 创建账号」创建账号，再将服务器地址和账号密码交给用户。桌面客户端点击顶栏「账号登录」，填写服务器地址、设备名称和账号密码；首次连接时须核对服务器指纹并确认信任，主机密钥变化也需要单独处理。
+
+登录会自动登记设备，无需上传 `.pub` 或提交设备 ID。已有私钥路径、设备 ID 和隧道配置会保留；没有私钥时自动生成。密码仅用于本次登录，提交后清空表单，不写入配置、浏览器存储或日志。普通重启可以使用已登记的设备密钥重连；管理员禁用账号或重置密码后，全部账号会话会断开，下一次需要密码登录，重新启用账号也不会自动恢复会话。
+
+账号密码与本机界面锁密码不同。锁定时主进程拒绝登录操作，须先解锁。设置中的密钥路径和手工生成工具保留在高级选项；已授权的 v2 设备可以继续沿用原手工授权规则，纳入账号后不能回退到旧文件授权。客户端配置仍为 schema 2。完整流程见[账号登录指南](../ACCOUNT_LOGIN_GUIDE.md)。
+
 ## 架构
 
 - `src/main`：窗口、托盘、单实例、核心进程发现/启动、本地 API 与 NDJSON 事件流。
@@ -35,6 +43,7 @@ npm run dev
 ```powershell
 npm run typecheck
 npm run build
+npm run test:security
 npm run package
 ```
 
@@ -50,7 +59,7 @@ GUI 与 CLI 使用独立的 [SemVer](https://semver.org/lang/zh-CN/) 版本号�
 - CLI 版本来自仓库根目录 `CLI_VERSION`，发布构建会把它注入 `tunnelx-cli.exe`。
 - 只修改 GUI 时只提升 GUI 版本；修改 CLI 时提升 CLI 版本，并至少提升 GUI 的补丁版本，因为桌面安装包是 CLI 更新的载体。
 
-仓库中的 `.github/workflows/release-desktop.yml` 负责在干净的 Windows runner 中测试、构建并发布未签名的 NSIS 安装版和 ZIP 便携版。创建标签前先同步版本，然后推送标签：
+仓库中的 `.github/workflows/release-desktop.yml` 负责在干净的 Windows runner 中测试、构建并发布签名的 NSIS 安装版和 ZIP 便携版。创建标签前先同步版本，然后推送标签：
 
 ```powershell
 # 示例：GUI 0.1.1，CLI 仍为 0.1.0
@@ -61,7 +70,11 @@ git tag v0.1.1
 git push origin HEAD --tags
 ```
 
-工作流只使用 GitHub 自动提供的 `GITHUB_TOKEN`，当前未配置 Windows 代码签名。首次使用时确认仓库 `Settings → Actions → General → Workflow permissions` 允许工作流写入 Releases。未签名安装程序可能触发 Windows SmartScreen 或“未知发布者”提示。
+发布前需要在仓库 Secrets 中设置代码签名证书 `CSC_LINK`、密码 `CSC_KEY_PASSWORD`，并在 Variables 中设置与证书 Subject 完全一致的 `TUNNELX_PUBLISHER_NAME`。工作流通过 `npm run package:signed` 强制签名；缺少配置时停止发布，不会生成冒充已签名的发行版。`GITHUB_TOKEN` 仍用于写入 Releases。证书未提供时可以用 `npm run package -- --publish never` 生成本地未签名测试包；这类构建禁用自动更新，用户可手动替换程序并保留 userData。现有未签名旧版首次迁移到签名版本也应手工安装经核验的新包。
+
+签名版将发布者固定在更新配置中，主进程给 electron-updater 注册的验证器要求 Windows Authenticode 状态为 Valid 且证书完整 Subject 完全匹配；PowerShell 不可用、解析失败或签名无效都会拒绝更新。此仓库不包含证书；配置检查不等于已完成真实签名验证，首次正式发布仍需使用实际证书构建并验证签名。
+
+界面锁在主进程拒绝受保护的 IPC，并且只有主窗口的主 frame 可调用接口；锁定后不能通过重新设密码绕过解锁。锁文件损坏会拒绝启动解锁流程。它仍是同一系统账户内的界面访问控制，不能替代操作系统账户隔离。生成公钥时用户名、邮箱均可留空，默认不采集计算机名；填写的描述信息会以明文写入公钥注释。
 
 安装版可使用应用内自动更新。ZIP 便携版若要继续保持免安装方式，请手动下载新版 ZIP，退出旧版本后解压到新的空目录；应用内确认更新会启动 NSIS 安装程序并转为安装版。两种版本的用户配置、SSH 密钥、known_hosts 和日志都保存在 Electron `userData` 目录中，不在程序目录内，不随发布包上传，也不会因为替换程序文件而删除。不要修改 `appId`、`productName` 或默认 `userData` 路径；这些变更必须配套数据迁移。
 

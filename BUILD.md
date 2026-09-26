@@ -8,7 +8,7 @@
 
 | 依赖 | 用途 | 验证过的版本 |
 |---|---|---|
-| Go 1.22+ | 编译 | go1.26.5 |
+| Go 1.26+ | 编译 | go1.27.1 |
 | Node.js + npm | 构建 Electron/Vue 桌面端和内嵌管理后台 | Node.js 22+ |
 
 全项目无需 CGO，**`CGO_ENABLED=0` 即可编译**，可从任意平台交叉编译。
@@ -16,7 +16,7 @@
 验证工具链：
 
 ```bash
-go version     # go1.22 或更高
+go version     # Go 1.26 或更高，发行版使用最新安全补丁
 ```
 
 ## 构建
@@ -110,8 +110,7 @@ internal/
   manager/           全局连接循环，驱动上述各层
   core/              UI 无关的应用服务、快照、事件与确认流
   localapi/          带鉴权的版本化本地 JSON/NDJSON API
-  registry/          服务端在线注册表
-  session/           服务端在线 SSH 会话与转发端口归属
+  session/           唯一在线会话、发布注册表和有界转发资源
   policy/            指纹黑名单快照与认证 admission gate
   store/             SQLite 客户端资料、黑名单与审计
   adminapi/          管理 REST API、SSE 与内嵌 SPA
@@ -122,7 +121,8 @@ desktop/
   src/preload/       隔离的白名单 IPC 桥
   src/renderer/      Vue 3 界面
 deploy/
-  install.sh         服务端一键安装脚本
+  install.sh         新安装入口，已有实例转入升级脚本
+  upgrade.sh         保留现有启动参数、密钥和数据的升级脚本
 ```
 
 两层重连的职责划分体现在包边界上：`manager` 负责 SSH 连接本身的断线
@@ -146,8 +146,8 @@ go test ./internal/server/ -v          # 服务端与安全边界
 | `TestControlChannelDoesNotBlockForwarding` | 同一连接上控制通道不阻塞转发通道（见下） |
 | `TestNoShellAccess` | 隧道密钥无法取得 shell |
 | `TestNoArbitraryForwardTarget` | 服务端不能被用作任意目标的跳板 |
-| `TestResolveRemotePort` | 按「对端身份 + 源端口」解析 |
-| `TestAuthKeysHotReload` | `authorized_keys` 变更即时生效 |
+| `TestResolveTarget` | 核对目标公钥、设备、隧道与当前发布版本 |
+| `TestAuthKeysStrictReloadAndEmpty` | 授权文件热更新，解析失败拒绝新准入 |
 
 ### 几个测试是护栏，不是形式
 

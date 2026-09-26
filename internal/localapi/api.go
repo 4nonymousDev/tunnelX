@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -21,6 +22,7 @@ import (
 	"tunnelx/internal/config"
 	"tunnelx/internal/core"
 	"tunnelx/internal/keygen"
+	"tunnelx/internal/keyperm"
 	"tunnelx/internal/logbuf"
 	"tunnelx/internal/manager"
 	"tunnelx/internal/proto"
@@ -162,6 +164,7 @@ func Start(service *core.Service, endpointPath string) (*Server, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/snapshot", s.auth(s.snapshot))
 	mux.HandleFunc("POST /v1/connect", s.auth(s.connect))
+	mux.HandleFunc("POST /v1/login", s.auth(s.login))
 	mux.HandleFunc("POST /v1/disconnect", s.auth(s.disconnect))
 	mux.HandleFunc("POST /v1/shutdown", s.auth(s.shutdownCore))
 	mux.HandleFunc("GET /v1/events", s.auth(s.events))
@@ -186,7 +189,7 @@ func reserveEndpoint(path string) (*os.File, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("创建控制目录: %w", err)
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	f, err := keyperm.Create(path)
 	if err == nil {
 		return f, nil
 	}
@@ -208,7 +211,7 @@ func reserveEndpoint(path string) (*os.File, error) {
 	if err := os.Remove(path); err != nil {
 		return nil, fmt.Errorf("移除失效控制端点: %w", err)
 	}
-	f, err = os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	f, err = keyperm.Create(path)
 	if err != nil {
 		return nil, fmt.Errorf("保留控制端点: %w", err)
 	}
@@ -217,15 +220,15 @@ func reserveEndpoint(path string) (*os.File, error) {
 
 func writeEndpoint(f *os.File, endpoint Endpoint) error {
 	defer f.Close()
+	if err := secureEndpointFile(f); err != nil {
+		return fmt.Errorf("设置控制端点权限: %w", err)
+	}
 	data, err := json.Marshal(endpoint)
 	if err != nil {
 		return err
 	}
 	if _, err := f.Write(append(data, '\n')); err != nil {
 		return fmt.Errorf("写入控制端点: %w", err)
-	}
-	if err := secureEndpointFile(f); err != nil {
-		return fmt.Errorf("设置控制端点权限: %w", err)
 	}
 	return f.Sync()
 }
@@ -357,6 +360,32 @@ func registryDTO(entry proto.RegistryEntry) RegistryDTO {
 
 func (s *Server) connect(w http.ResponseWriter, _ *http.Request) {
 	s.service.Start()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type LoginRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+func (s *Server) login(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	var value LoginRequest
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&value); err != nil {
+		writeError(w, errors.New("登录请求格式无效"))
+		return
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		writeError(w, errors.New("登录请求格式无效"))
+		return
+	}
+	if err := s.service.Login(r.Context(), value.Username, value.Password); err != nil {
+		writeError(w, err)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 func (s *Server) disconnect(w http.ResponseWriter, _ *http.Request) {
@@ -614,6 +643,13 @@ func (c *Client) Snapshot(ctx context.Context) (SnapshotDTO, error) {
 }
 func (c *Client) Connect(ctx context.Context) error {
 	resp, err := c.request(ctx, http.MethodPost, "/v1/connect", nil)
+	if resp != nil {
+		resp.Body.Close()
+	}
+	return err
+}
+func (c *Client) Login(ctx context.Context, username, password string) error {
+	resp, err := c.request(ctx, http.MethodPost, "/v1/login", LoginRequest{Username: username, Password: password})
 	if resp != nil {
 		resp.Body.Close()
 	}

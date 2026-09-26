@@ -3,14 +3,19 @@
 package localapi
 
 import (
+	"fmt"
 	"os"
 
 	"tunnelx/internal/keyperm"
 )
 
 func secureEndpointFile(f *os.File) error {
-	if err := f.Chmod(0o600); err != nil {
-		return err
+	result := keyperm.Check(f.Name())
+	if result.Err != nil {
+		return result.Err
 	}
-	return keyperm.Fix(f.Name())
+	if !result.OK {
+		return fmt.Errorf("控制端点权限过宽")
+	}
+	return nil
 }

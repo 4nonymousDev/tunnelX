@@ -64,7 +64,8 @@ type Tunnel struct {
 	// Import mode listens on ListenPort and forwards to an exported tunnel on PeerID.
 	// New configs match peer identity plus stable tunnel ID; legacy configs fall back to
 	// source port. The dynamic server port is never persisted.
-	PeerID string `json:"peer_id,omitempty"` // 对端 Exporter UUID / Peer Exporter UUID.
+	PeerID          string `json:"peer_id,omitempty"` // 对端 Exporter UUID / Peer Exporter UUID.
+	PeerFingerprint string `json:"peer_fingerprint,omitempty"`
 	// Peer exporter UUID.
 	PeerTunnelID string `json:"peer_tunnel_id,omitempty"` // 对端导出隧道的稳定 ID；旧配置为空时按端口兼容 / Stable peer tunnel ID; legacy empty values match by port.
 	// Stable peer tunnel ID; legacy empty values fall back to the port.
@@ -79,6 +80,7 @@ type Tunnel struct {
 // Config 是完整的配置文件内容。
 // Config is the complete configuration-file content.
 type Config struct {
+	SchemaVersion int `json:"schema_version"`
 	// ID 是本机的稳定身份，首次启动生成后永不改变。
 	// 不能只用计算机名做身份：Windows 默认名重名概率虽低，但用户手动改名
 	// （DEV-PC、WIN10）或从同一镜像克隆的机器/虚拟机，重名很常见，会导致
@@ -209,8 +211,46 @@ func loadFrom(path string) (*Config, error) {
 	}
 	c.path = path
 	c.loaded = true
+	if c.SchemaVersion > 2 {
+		return nil, fmt.Errorf("配置版本 %d 不受当前程序支持", c.SchemaVersion)
+	}
 	applyDefaults(&c)
+	if c.SchemaVersion < 2 {
+		if err := backupLegacy(path, data); err != nil {
+			return nil, err
+		}
+		c.SchemaVersion = 2
+		if err := c.Save(); err != nil {
+			return nil, fmt.Errorf("迁移旧配置: %w", err)
+		}
+	}
 	return &c, nil
+}
+
+func backupLegacy(path string, data []byte) error {
+	backup := path + ".pre-v2.bak"
+	f, err := os.OpenFile(backup, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if errors.Is(err, fs.ErrExist) {
+		existing, readErr := os.ReadFile(backup)
+		if readErr != nil {
+			return readErr
+		}
+		if string(existing) != string(data) {
+			return fmt.Errorf("旧配置备份已存在且内容不同: %s", backup)
+		}
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("备份旧配置: %w", err)
+	}
+	if _, err = f.Write(data); err == nil {
+		err = f.Sync()
+	}
+	closeErr := f.Close()
+	if err != nil {
+		return err
+	}
+	return closeErr
 }
 
 // applyDefaults 补齐历史配置或人工编辑遗漏的必填项。
@@ -278,6 +318,9 @@ func (c *Config) Loaded() bool { return c.loaded }
 // Save 原子写回配置：先写临时文件再改名，避免写入中途崩溃导致配置损坏。
 // Save atomically writes through a temporary file and rename to avoid partial corruption.
 func (c *Config) Save() error {
+	if c.SchemaVersion < 2 {
+		c.SchemaVersion = 2
+	}
 	if c.path == "" {
 		dir, err := Dir()
 		if err != nil {
@@ -402,10 +445,11 @@ func (c *Config) ResolvedKeyPath() (string, error) {
 
 func newDefault() *Config {
 	return &Config{
-		ID:      newID(),
-		Name:    hostname(),
-		KeyPath: DefaultKeyName,
-		Tunnels: []Tunnel{},
+		SchemaVersion: 2,
+		ID:            newID(),
+		Name:          hostname(),
+		KeyPath:       DefaultKeyName,
+		Tunnels:       []Tunnel{},
 	}
 }
 

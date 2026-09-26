@@ -35,6 +35,14 @@ func startTestServer(t *testing.T) (addr, keyPath string) {
 
 	writeKey(t, hostKey)
 	pub := writeKey(t, clientKey)
+	publicKey, _, _, _, err := ssh.ParseAuthorizedKey(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindings := map[string]string{}
+	for _, id := range []string{"exporter-uuid", "peer-uuid", "importer-uuid", "same-uuid", "correct-peer-id", "importer-id"} {
+		bindings[id] = ssh.FingerprintSHA256(publicKey)
+	}
 	if err := os.WriteFile(authKeys, pub, 0o600); err != nil {
 		t.Fatalf("写入 authorized_keys: %v", err)
 	}
@@ -49,10 +57,11 @@ func startTestServer(t *testing.T) (addr, keyPath string) {
 	ln.Close()
 
 	srv, err := server.New(server.Config{
-		Addr:           addr,
-		HostKeyPath:    hostKey,
-		AuthorizedKeys: authKeys,
-		Version:        "test",
+		Addr:             addr,
+		HostKeyPath:      hostKey,
+		AuthorizedKeys:   authKeys,
+		Version:          "test",
+		IdentityBindings: bindings,
 	}, func(format string, args ...any) { t.Logf("[server] "+format, args...) })
 	if err != nil {
 		t.Fatalf("创建服务端: %v", err)
@@ -151,8 +160,8 @@ func TestHandshakeAndPublish(t *testing.T) {
 	if !ok {
 		t.Fatalf("注册表中缺少源端口 80 的条目: %+v", entries)
 	}
-	if web.RemotePort != 18080 {
-		t.Errorf("服务端端口 = %d, 期望 18080", web.RemotePort)
+	if web.RemotePort != 0 || !web.IdentityVerified || !web.Target().Valid() {
+		t.Errorf("发布缺少可信v2目标: %+v", web)
 	}
 	if web.Name != "办公室PC" {
 		t.Errorf("机器名 = %q, 期望 办公室PC", web.Name)
@@ -172,7 +181,7 @@ func TestHandshakeAndPublish(t *testing.T) {
 // 服务端端口是动态分配的，重连后会变，因此不能按端口号记忆，只能按身份匹配。
 // TestResolveRemotePort verifies identity-based lookup because dynamic ports change on reconnect.
 // TestResolveRemotePort verifies lookup by peer identity and tunnel ID because dynamic ports change on reconnect.
-func TestResolveRemotePort(t *testing.T) {
+func TestResolveTarget(t *testing.T) {
 	addr, keyPath := startTestServer(t)
 
 	exporter := dialClient(t, addr, keyPath, "peer-uuid", "办公室PC", proto.RoleExporter)
@@ -182,20 +191,17 @@ func TestResolveRemotePort(t *testing.T) {
 	importer := dialClient(t, addr, keyPath, "importer-uuid", "笔记本", proto.RoleImporter)
 	waitRegistry(t, importer, 1)
 
-	port, ok := importer.ResolveRemotePort("peer-uuid", "web", 80)
-	if !ok {
-		t.Fatal("未能解析出对端端口")
-	}
-	if port != 18080 {
-		t.Errorf("解析得到端口 %d, 期望 18080", port)
+	target, err := importer.ResolveTarget("peer-uuid", "", "web", 80)
+	if err != nil || !target.Valid() || target.TunnelID != "web" {
+		t.Fatalf("解析目标: %+v, %v", target, err)
 	}
 
 	// 对端不存在时须报告 not ok，供隧道进入"对端离线"状态。
 	// A missing peer must report not-ok so the tunnel enters Peer Offline state.
-	if _, ok := importer.ResolveRemotePort("nonexistent", "web", 80); ok {
+	if _, err := importer.ResolveTarget("nonexistent", "", "web", 80); err == nil {
 		t.Error("对不存在的对端应返回 ok=false")
 	}
-	if _, ok := importer.ResolveRemotePort("peer-uuid", "nonexistent", 9999); ok {
+	if _, err := importer.ResolveTarget("peer-uuid", "", "nonexistent", 9999); err == nil {
 		t.Error("对不存在的源端口应返回 ok=false")
 	}
 }
@@ -214,18 +220,17 @@ func TestPublishAndResolveSamePortByTunnelID(t *testing.T) {
 		t.Fatalf("相同源端口应保留两条注册记录: %+v", entries)
 	}
 
-	if port, ok := importer.ResolveRemotePort("peer-uuid", "local-web", 80); !ok || port != 18080 {
-		t.Fatalf("本机 Web 解析 = %d, %v，期望 18080, true", port, ok)
+	if target, err := importer.ResolveTarget("peer-uuid", "", "local-web", 80); err != nil || target.TunnelID != "local-web" {
+		t.Fatalf("本机 Web 解析 = %+v, %v", target, err)
 	}
-	if port, ok := importer.ResolveRemotePort("peer-uuid", "file-server", 80); !ok || port != 28080 {
-		t.Fatalf("文件服务解析 = %d, %v，期望 28080, true", port, ok)
+	if target, err := importer.ResolveTarget("peer-uuid", "", "file-server", 80); err != nil || target.TunnelID != "file-server" {
+		t.Fatalf("文件服务解析 = %+v, %v", target, err)
 	}
 
 	// 没有 peer_tunnel_id 的旧配置仍按源端口工作。
 	// Legacy configurations without peer_tunnel_id still resolve by source port.
-	if port, ok := importer.ResolveRemotePort("peer-uuid", "", 80); !ok ||
-		(port != 18080 && port != 28080) {
-		t.Fatalf("旧配置回退解析 = %d, %v", port, ok)
+	if target, err := importer.ResolveTarget("peer-uuid", "", "", 80); err == nil {
+		t.Fatalf("歧义旧配置不应选择任意隧道: %+v", target)
 	}
 
 	exporter.Untrack("local-web")
@@ -234,11 +239,11 @@ func TestPublishAndResolveSamePortByTunnelID(t *testing.T) {
 	if wantRemaining[0].TunnelID != "file-server" {
 		t.Fatalf("注销一条隧道误删了另一条同端口隧道: %+v", wantRemaining)
 	}
-	if _, ok := importer.ResolveRemotePort("peer-uuid", "local-web", 80); ok {
+	if _, err := importer.ResolveTarget("peer-uuid", "", "local-web", 80); err == nil {
 		t.Fatal("已注销的隧道仍能解析")
 	}
-	if port, ok := importer.ResolveRemotePort("peer-uuid", "file-server", 80); !ok || port != 28080 {
-		t.Fatalf("剩余同端口隧道解析 = %d, %v，期望 28080, true", port, ok)
+	if target, err := importer.ResolveTarget("peer-uuid", "", "file-server", 80); err != nil || target.TunnelID != "file-server" {
+		t.Fatalf("剩余同端口隧道解析 = %+v, %v", target, err)
 	}
 }
 
@@ -314,7 +319,7 @@ func TestPeerOfflineRemovesEntry(t *testing.T) {
 	peer.Publish()
 
 	waitRegistry(t, importer, 1)
-	if _, ok := importer.ResolveRemotePort("peer-uuid", "web", 80); !ok {
+	if _, err := importer.ResolveTarget("peer-uuid", "", "web", 80); err != nil {
 		t.Fatal("对端上线后应能解析到端口")
 	}
 
@@ -324,7 +329,7 @@ func TestPeerOfflineRemovesEntry(t *testing.T) {
 	peerConn.Close()
 
 	waitRegistry(t, importer, 0)
-	if _, ok := importer.ResolveRemotePort("peer-uuid", "web", 80); ok {
+	if _, err := importer.ResolveTarget("peer-uuid", "", "web", 80); err == nil {
 		t.Error("对端下线后不应再解析到端口")
 	}
 }

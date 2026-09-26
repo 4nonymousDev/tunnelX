@@ -12,8 +12,8 @@ TunnelX is an SSH port-forwarding tool for remote development and debugging. It 
 │ nginx :80    │            │             │            │ Browser      │
 │      ▲       │            │             │            │ localhost:80 │
 │      │       │            │             │            │      │       │
-│  TunnelX  ═══╪═══ SSH ═══▶│  :41273 ◄───┬═══ SSH ═══╪══ TunnelX    │
-│  [Export]    │            │ (loopback)  │            │  [Import]     │
+│  TunnelX  ═══╪═══ SSH ═══▶│ verified    ┼═══ SSH ═══╪══ TunnelX    │
+│  [Export]    │            │ SSH routing │            │  [Import]     │
 └──────────────┘            └─────────────┘            └──────────────┘
 ```
 
@@ -23,8 +23,10 @@ TunnelX is an SSH port-forwarding tool for remote development and debugging. It 
 - The Windows desktop application uses Electron and Vue and talks to the standalone Go core through a local API.
 - The client, CLI, and server can all be built as single files and do not depend on the system OpenSSH installation.
 - The server embeds a management REST API and Vue admin console in one binary, with history and audit data persisted in SQLite.
-- Importers resolve tunnels by machine identity and source port instead of relying on dynamically allocated server ports.
-- The server provides no shell and restricts forwarding targets to loopback addresses.
+- Importers bind a verified device, public key, and tunnel ID, checking the current session and publication generation on each connection.
+- The server provides no shell and accepts no arbitrary server-address or TCP-port forwarding.
+
+For an existing installation, read the [upgrade instructions](UPGRADE_GUIDE.md). Account login requires updated server and client programs; existing keys, IDs, and tunnel configurations are retained. Already authorized v2 clients outside account management may continue under their manual authorization rules.
 
 ## Quick Start
 
@@ -41,7 +43,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
   go build -ldflags "-s -w" -o tunnel-server-linux-amd64 ./cmd/tunnel-server
 
 # Upload and install
-scp deploy/install.sh tunnel-server-linux-amd64 user@your-server:~/
+scp deploy/install.sh deploy/upgrade.sh tunnel-server-linux-amd64 user@your-server:~/
 ssh user@your-server 'chmod +x install.sh && sudo ./install.sh'
 ```
 
@@ -54,51 +56,26 @@ ssh -L 2223:127.0.0.1:2223 user@your-server
 # Browse to http://127.0.0.1:2223
 ```
 
-### 2. Generate and register a key
+### 2. An administrator creates an account
 
-**Generate:** Double-click `tunnelx.exe`, open **Settings**, then click **Generate** beside **Private key**. Enter a username and email address. The client creates a passphrase-free ed25519 key and stores the username, email, and computer name as plaintext JSON in the `.pub` comment. This metadata is for identification only and is not used for SSH authentication. OpenSSH and command-line work are not required.
+Open **Account management (账号管理) → Create account** in the admin console. Set a username, password, device limit, and audit reason. The default limit is 10 devices, configurable from 1 to 50. Give the user the server address and credentials through a trusted channel. There is no public self-registration.
 
-**Register:** Open **Clients** in the management page, click **Import .pub**, and select the generated `tunnel_key.pub`. The page pre-fills the username, email, and computer name from the comment. Confirming immediately authorizes the key and records an administrative audit event.
+### 3. Log in from the client
 
-You can also append the public key to the server's `authorized_keys` manually:
+Open **Account login (账号登录)** in the updated desktop client. Enter the server address, such as `your-server.com:2222`, device name, username, and password. Verify the server fingerprint when first prompted. The client enrolls the device and connects automatically: no `.pub` upload or manual device ID is needed.
 
-```bash
-ssh user@your-server \
-  'sudo tee -a /etc/tunnel-server/authorized_keys' # Paste the key, press Enter, then Ctrl-D
-```
+Existing keys, device IDs, and tunnels are retained. A missing device key is generated automatically. Passwords are used only for the current login and are not saved to configuration or logs. These are not Linux accounts. Ordinary accounts cannot use the admin console, which requires explicitly provisioned administrator privileges and retains login across refreshes. See the [admin login guide](ADMIN_LOGIN_GUIDE.md).
 
-The change takes effect in about two seconds without restarting the service.
+Normal restarts and brief outages reconnect using the local device credential. Disabling an account or resetting its password closes all its sessions. Devices must enter the current password again, including after re-enabling; they do not recover automatically. See the [account login guide](ACCOUNT_LOGIN_GUIDE.md).
 
 <details>
-<summary>You can also use ssh-keygen (convenient for bulk deployment or server-side work)</summary>
+<summary>Advanced: existing public keys and device identities</summary>
 
-```bash
-# Generate a tunnel-specific key on your machine
-ssh-keygen -t ed25519 -f tunnel_key -N ""
+Already authorized v2 devices outside account management can continue using their original `authorized_keys` and trusted identity binding. **Devices and advanced management (设备与高级管理) → Existing public keys and identities** retains manual key registration, original-ID binding, rotation, and revocation. Adding a key to the file alone does not establish a trusted ID. Historical self-reported IDs are not automatically trusted.
 
-# Register the public key (takes effect in about two seconds without restart)
-cat tunnel_key.pub | ssh user@your-server \
-  'sudo tee -a /etc/tunnel-server/authorized_keys > /dev/null'
-```
-
-This key is equivalent to one generated by the UI: both are passphrase-free ed25519 keys.
+The authorization file reloads about every two seconds and rejects unsupported options such as `from=` and `command=`. Avoid concurrent manual edits and management imports. After an existing device logs into an account, that account controls admission; a remaining file entry cannot bypass account disabling, password reset, or device revocation. Never reuse a private key that grants system access to the server.
 
 </details>
-
-> **Do not reuse the server login key.** It can open a root shell. Distributing it to clients also distributes server privileges and prevents revoking a single compromised machine.
-
-### 3. Configure the client
-
-Return to **Settings** and fill in the remaining fields (a key generated by the UI is already selected):
-
-| Field | Example |
-|---|---|
-| Server | `your-server.com:2222` |
-| Private key | `tunnel_key` |
-
-The SSH username is now an internal protocol value. Users do not configure it, and it does not refer to a server operating-system account.
-
-For a key generated with `ssh-keygen`, put `tunnel_key` beside `tunnelx.exe` and enter its filename, or select it with **Browse…**.
 
 ### 4. Create tunnels
 
@@ -110,7 +87,9 @@ Then open `http://localhost:<your-local-port>` to reach the peer service.
 
 ## Configuration File
 
-All UI configuration is stored in `config.json` beside `tunnelx.exe`. Manual editing is normally unnecessary but is convenient for bulk deployment.
+Desktop configuration defaults to Electron's `userData/config.json`; the CLI uses its selected configuration file. Manual editing is normally unnecessary.
+
+Client configuration remains at schema 2; the server database upgrades to schema 5. Migrations preserve existing identities, keys, and tunnels. Back up before upgrading; see the [upgrade instructions](UPGRADE_GUIDE.md).
 
 See [config.example.json](config.example.json) for a complete annotated example.
 
@@ -141,7 +120,7 @@ The `server_user` field in legacy configurations is ignored; connections always 
 
 Each export has a unique `id`, so one client can export the same port from different addresses, such as `127.0.0.1:80` and `192.168.1.50:80`. The client generates an empty ID automatically; manually assigned IDs must be unique.
 
-The server allocates the public-side port automatically; it cannot and need not be specified.
+The server routes directly to the verified exporter's SSH connection; no relay port is allocated or configured.
 
 ### Import tunnels
 
@@ -170,13 +149,25 @@ Prefer **Add from online list** because manually entering `peer_id` is error-pro
 
 `enabled: false` temporarily disables a tunnel without deleting its configuration.
 
-When one Exporter publishes multiple services with the same port, tunnel-server and both clients must support `tunnel_id`. Old Importer configurations without `peer_tunnel_id` remain compatible through `peer_id + peer_src_port`, but cannot distinguish two identical peer ports.
+An old import without `peer_tunnel_id` is completed only when its `peer_id + peer_src_port` uniquely matches the trusted registry. Ambiguous matches are rejected. Version 1 programs must upgrade to v2.
 
 ## Linux CLI Client
 
 `tunnelx-cli` is a CGO-free portable Linux client that does not depend on Debian or systemd. A static ELF for an architecture works across Debian, Ubuntu, RHEL, Fedora, Arch, Alpine, and other mainstream distributions.
 
-### Generate a client key
+### Account login
+
+Configure the server address, run the core, and log in from a second terminal using the same configuration path:
+
+```bash
+./tunnelx-cli run --confirm-via-api
+# In a second terminal:
+./tunnelx-cli login --username alice
+```
+
+The password is read without terminal echo and is never passed as a command-line argument. Existing device keys are reused; a missing key is generated. No `.pub` submission is required. Verify the first server fingerprint as described in the [account login guide](ACCOUNT_LOGIN_GUIDE.md).
+
+### Advanced: generate a key for manual device management
 
 The CLI generates a tunnel-specific key without depending on the system `ssh-keygen`:
 
@@ -187,11 +178,11 @@ The CLI generates a tunnel-specific key without depending on the system `ssh-key
   --output tunnel_key
 ```
 
-`--output` defaults to `tunnel_key` in the current directory. The command never overwrites an existing private key or `.pub` file. It stores the username, email, and automatically detected computer name as plaintext JSON in the `.pub` comment, ready for import through the server management page.
+`--output` defaults to `tunnel_key` in the current directory. The command never overwrites an existing private key or `.pub` file. Username and email are optional; supplied metadata is plaintext in the public-key comment, and the hostname is not collected automatically. This is an advanced manual-management tool, not a prerequisite for account login.
 
 ### Portable execution
 
-Put `tunnelx-cli`, `config.json`, and `tunnel_key` in one directory:
+Configure the server address and retain existing configuration and keys. A new device can generate its key during account login:
 
 ```bash
 chmod +x tunnelx-cli
@@ -275,6 +266,7 @@ tunnelx-cli commands ───┘          ▲
 
 | Document | Contents |
 |---|---|
+| [ACCOUNT_LOGIN_GUIDE.md](ACCOUNT_LOGIN_GUIDE.md) | Administrator-created accounts, automatic device enrollment, and logging in again |
 | [BUILD.en.md](BUILD.en.md) | Build instructions, directory layout, tests, and troubleshooting |
 | [DEPLOY.en.md](DEPLOY.en.md) | Complete deployment guide, key planning, firewall, and audit logs |
 | [deploy/README.en.md](deploy/README.en.md) | One-click installer usage |
@@ -284,12 +276,12 @@ tunnelx-cli commands ───┘          ▲
 | | TunnelX | frp / ngrok | Dev Tunnels |
 |---|---|---|---|
 | Transport | SSH | Custom protocol / HTTP | HTTPS |
-| Authentication | SSH public key | Token | Microsoft account |
+| Authentication | Account enrollment, then device public key | Token | Microsoft account |
 | Server | Self-hosted | Self-hosted / hosted | Hosted |
 | Client | Headless core + desktop/CLI front ends | CLI + configuration file | VS Code extension / CLI |
 | Dependencies | None | None | VS Code / .NET |
 
-TunnelX uses SSH because `golang.org/x/crypto/ssh` supplies authentication and encryption, avoiding custom authentication code where security defects are most likely.
+`golang.org/x/crypto/ssh` supplies SSH transport encryption and public-key verification. Account passwords are used for restricted device enrollment; the server stores salted password hashes rather than plaintext. See the [account login guide](ACCOUNT_LOGIN_GUIDE.md).
 
 ## System Requirements
 
@@ -303,10 +295,10 @@ TunnelX uses SSH because `golang.org/x/crypto/ssh` supplies authentication and e
 
 ## Security
 
-- Server forwarding ports are **hard-coded to bind to `127.0.0.1`**, so private services are not exposed directly to the Internet.
-- Importer targets are also restricted to loopback, preventing use of the server as a relay.
-- The server accepts only public-key authentication and provides no password authentication.
-- The management API may bind only to an explicit loopback address and requires a Bearer Token.
+- The server routes to an exact device, key, tunnel, session, and publication generation, without relay ports or shell access.
+- Arbitrary server-address forwarding and legacy TCP forwarding are rejected.
+- Password authentication permits device enrollment only. Business connections use device keys; old authorization-file entries cannot bypass account disabling or password resets.
+- The management API may bind only to an explicit loopback address and requires administrator account login. An HttpOnly session cookie retains login; writes require matching origin and CSRF validation. Legacy Bearer tokens are not accepted.
 - Online client state is memory-only; profiles, blacklist entries, and new audit events use pure-Go SQLite.
 - Clients validate private-key permissions with Windows ACLs or Unix file modes.
 - Clients display the server host fingerprint on first connection and enforce it thereafter to prevent man-in-the-middle attacks.
@@ -316,3 +308,5 @@ These boundaries are enforced by `internal/server/security_test.go`; loosening t
 ## Status
 
 The complete path has been tested between Windows 11 and a Linux server. Core functionality is usable and details continue to be refined. Issues are welcome.
+
+Security upgrade: account login requires updated server and client programs. Existing keys, IDs, and tunnels are retained. Previously authorized v2 devices may continue under manual authorization until enrolled into an account; v1 programs must upgrade. The database is schema 5 and client configuration remains schema 2. Preserve matching program and data backups when recovering. See the [account login guide](ACCOUNT_LOGIN_GUIDE.md), [upgrade instructions](UPGRADE_GUIDE.md), and [deployment guide](deploy/README.en.md).

@@ -21,6 +21,7 @@
 # binary beside this script and run it again.
 
 set -euo pipefail
+umask 077
 
 # ---------- 默认值 ----------
 # ---------- Defaults ----------
@@ -32,6 +33,7 @@ SERVICE_NAME="tunnel-server"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 RUN_USER="tunnel"
 PORT="2222"
+PORT_SET=0
 DO_UNINSTALL=0
 DO_PURGE=0
 
@@ -56,9 +58,9 @@ die()   { printf '%s  ✗%s %s\n' "$c_red"   "$c_off" "$*" >&2; exit 1; }
 # return 1, so the fallback appends another zero and breaks later arithmetic.
 # Emitting matching lines with grep -o and counting them makes wc -l succeed.
 count_keys() {
-    local f="$CONFIG_DIR/authorized_keys"
+    local f="$DATA_DIR/authorized_keys"
     [[ -f "$f" ]] || { echo 0; return; }
-    grep -o '^ssh-[^ ]*' "$f" 2>/dev/null | wc -l | tr -d ' '
+    awk '/^ssh-/ { n++ } END { print n+0 }' "$f"
 }
 
 usage() {
@@ -72,7 +74,7 @@ usage() {
 # ---------- Arguments ----------
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --port)      PORT="${2:?--port 需要一个端口号}"; shift 2 ;;
+        --port)      PORT="${2:?--port 需要一个端口号}"; PORT_SET=1; shift 2 ;;
         --binary)    BINARY_NAME="${2:?--binary 需要一个文件名}"; shift 2 ;;
         --uninstall) DO_UNINSTALL=1; shift ;;
         --purge)     DO_PURGE=1; shift ;;
@@ -82,6 +84,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ $EUID -eq 0 ]] || die "请用 root 运行：sudo $0 $*"
+[[ $PORT =~ ^[0-9]{1,5}$ ]] && ((10#$PORT > 0 && 10#$PORT <= 65535)) || die "端口无效"
+PORT=$((10#$PORT))
 
 command -v systemctl >/dev/null 2>&1 || die "未找到 systemctl，本脚本仅支持 systemd 系统"
 
@@ -95,7 +99,8 @@ if [[ $DO_UNINSTALL -eq 1 ]]; then
         ok "服务已停止并取消开机自启"
     fi
 
-    rm -f "$SERVICE_FILE" && systemctl daemon-reload
+    rm -f "$SERVICE_FILE" "/etc/systemd/system/${SERVICE_NAME}.service.d/90-tunnelx-upgrade.conf"
+    systemctl daemon-reload
     rm -f "$INSTALL_PATH"
     ok "已移除服务与二进制"
 
@@ -140,6 +145,13 @@ if command -v file >/dev/null 2>&1; then
     esac
 fi
 
+if [[ -n $(systemctl show "$SERVICE_NAME" -p FragmentPath --value 2>/dev/null || true) ]]; then
+    ((PORT_SET == 0)) || die "升级保留原端口，请不要传 --port"
+    [[ -f "$SCRIPT_DIR/upgrade.sh" ]] || die "升级需要同目录的 deploy/upgrade.sh"
+    exec bash "$SCRIPT_DIR/upgrade.sh" "$SRC_BINARY"
+fi
+chmod +x -- "$SRC_BINARY"
+"$SRC_BINARY" -version >/dev/null || die "新二进制无法运行"
 info "安装 tunnel-server（端口 $PORT）"
 
 # ---------- 服务账户 ----------
@@ -176,7 +188,7 @@ ok "版本：$VERSION"
 
 # ---------- 配置目录 ----------
 # ---------- Configuration directory ----------
-mkdir -p "$CONFIG_DIR"
+mkdir -p "$CONFIG_DIR" "$DATA_DIR"
 
 # 主机密钥：绝不覆盖已有的。
 # Never overwrite an existing host key.
@@ -197,33 +209,29 @@ fi
 # 授权公钥：同样不覆盖。
 # Never overwrite authorized public keys either.
 if [[ -f "$CONFIG_DIR/authorized_keys" ]]; then
+    if [[ -e "$DATA_DIR/authorized_keys" ]]; then
+        cmp -s "$CONFIG_DIR/authorized_keys" "$DATA_DIR/authorized_keys" || die "两处 authorized_keys 不一致，请先合并确认后重新安装"
+    else
+        install -m 0600 "$CONFIG_DIR/authorized_keys" "$DATA_DIR/authorized_keys"
+    fi
+fi
+if [[ -f "$DATA_DIR/authorized_keys" ]]; then
     key_count="$(count_keys)"
     ok "authorized_keys 已存在（$key_count 个公钥），保留不动"
 else
-    touch "$CONFIG_DIR/authorized_keys"
-    warn "authorized_keys 为空——尚无客户端可以连接，安装完成后请登记公钥"
+    touch "$DATA_DIR/authorized_keys"
+    warn "authorized_keys 为空；安装完成后创建管理员，再通过账号管理为客户端创建账号"
 fi
 
 chown -R "$RUN_USER:$RUN_USER" "$CONFIG_DIR"
+chown "$RUN_USER:$RUN_USER" "$DATA_DIR" "$DATA_DIR/authorized_keys"
 chmod 700 "$CONFIG_DIR"
-chmod 600 "$CONFIG_DIR/host_key" "$CONFIG_DIR/authorized_keys"
+chmod 600 "$CONFIG_DIR/host_key" "$DATA_DIR/authorized_keys"
 
-# ---------- 管理凭据与数据目录 ----------
-# ---------- Management credentials and data directory ----------
-# 32 个随机字节编码为 64 位十六进制。升级时绝不覆盖已有 Token。
-# Encode 32 random bytes as 64 hexadecimal characters. Never replace an
-# existing token during an upgrade.
-if [[ -f "$CONFIG_DIR/admin.token" ]]; then
-    ok "管理 Token 已存在，保留不动"
-else
-    umask 077
-    od -An -N32 -tx1 /dev/urandom | tr -d ' \n' > "$CONFIG_DIR/admin.token"
-    printf '\n' >> "$CONFIG_DIR/admin.token"
-    ok "已生成管理 Token"
-fi
-chown "$RUN_USER:$RUN_USER" "$CONFIG_DIR/admin.token"
-chmod 600 "$CONFIG_DIR/admin.token"
-
+# ---------- 管理账号与数据目录 ----------
+# ---------- Management accounts and data directory ----------
+# Administrators are explicitly provisioned in SQLite using -admin-account.
+# Legacy token files remain untouched but no longer authenticate requests.
 mkdir -p "$DATA_DIR"
 chown "$RUN_USER:$RUN_USER" "$DATA_DIR"
 chmod 700 "$DATA_DIR"
@@ -259,9 +267,8 @@ UMask=0077
 ExecStart=$INSTALL_PATH \\
   -addr :$PORT \\
   -hostkey $CONFIG_DIR/host_key \\
-  -auth $CONFIG_DIR/authorized_keys \\
+  -auth $DATA_DIR/authorized_keys \\
   -admin-addr 127.0.0.1:2223 \\
-  -admin-token-file $CONFIG_DIR/admin.token \\
   -data-dir $DATA_DIR
 
 # 常驻：异常退出后自动拉起
@@ -290,6 +297,10 @@ ReadOnlyPaths=$CONFIG_DIR
 # 仅需 IPv4/IPv6 socket
 # Only IPv4/IPv6 sockets are required.
 RestrictAddressFamilies=AF_INET AF_INET6
+LimitNOFILE=4096
+TasksMax=256
+MemoryHigh=768M
+MemoryMax=1G
 
 [Install]
 WantedBy=multi-user.target
@@ -349,8 +360,13 @@ ${c_bold}常用命令${c_off}
 
 ${c_bold}访问管理后台${c_off}
 
+  首次创建管理员（密码交互输入，不写入命令行）：
+  sudo systemctl stop $SERVICE_NAME
+  sudo -u $RUN_USER $INSTALL_PATH -data-dir $DATA_DIR -admin-account admin
+  sudo systemctl start $SERVICE_NAME
+
   ssh -L 2223:127.0.0.1:2223 <user>@<server>
-  然后浏览 http://127.0.0.1:2223
+  然后浏览 http://127.0.0.1:2223，用管理员账号密码登录；刷新保留登录状态。
 
 EOF
 
@@ -362,19 +378,10 @@ printf '%s云服务器还需在控制台的安全组中放行 %s/tcp%s\n\n' "$c_
 
 if [[ "$KEY_COUNT" -eq 0 ]]; then
     cat <<EOF
-${c_bold}下一步：登记客户端公钥${c_off}
+${c_bold}下一步：创建客户端账号${c_off}
 
-在客户端机器上生成隧道专用密钥，并把公钥送到服务器：
-
-  ssh-keygen -t ed25519 -f tunnel_key -N ""
-  cat tunnel_key.pub | ssh <你的用户名>@<本机地址> \\
-    'sudo tee -a $CONFIG_DIR/authorized_keys > /dev/null'
-
-登记后约 2 秒自动生效，无需重启服务。
+在管理后台「账号管理」为用户创建普通账号。用户在客户端登录后自动登记设备。
+普通账号没有管理权限，原公钥和设备 ID 无需更换。
 
 EOF
-fi
-
-if [[ $WAS_RUNNING -eq 1 ]]; then
-    warn "本次为升级安装，客户端会自动重连（约 5 秒后）"
 fi

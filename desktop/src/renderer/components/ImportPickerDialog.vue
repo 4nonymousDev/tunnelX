@@ -4,7 +4,7 @@
       <div class="dialog-heading">
         <div>
           <p class="eyebrow">IMPORT FROM SERVER</p>
-          <h2 class="dialog-title">接入服务端已映射端口</h2>
+          <h2 class="dialog-title">接入已发布的隧道</h2>
           <p class="dialog-copy">选择在线设备发布的服务，并指定本机访问端口。</p>
         </div>
         <button class="dialog-close" type="button" aria-label="关闭" @click="emit('close')">×</button>
@@ -49,8 +49,8 @@
                 <span>{{ entry.source_host || '127.0.0.1' }}:{{ entry.source_port }}</span>
               </div>
               <div class="server-port">
-                <span>服务端映射</span>
-                <strong>{{ entry.remote_port ? `:${entry.remote_port}` : '待分配' }}</strong>
+                <span>状态</span>
+                <strong>已发布</strong>
               </div>
               <label class="local-port">
                 <span>本机端口</span>
@@ -80,7 +80,7 @@
           >
             <div class="entry-copy">
               <strong>{{ importName(item.entry) }}</strong>
-              <span>{{ item.entry.name || item.entry.id }} · 服务端 :{{ item.entry.remote_port || '待分配' }}</span>
+              <span>{{ item.entry.name || item.entry.id }} · {{ item.entry.tunnel_name || item.entry.tunnel_id || '已发布' }}</span>
             </div>
             <span class="unavailable-reason">{{ item.reason }}</span>
           </div>
@@ -203,7 +203,7 @@ function clearSelection(): void {
 function submit(): void {
   const entries = selectedEntries.value
   if (entries.length === 0) {
-    validationError.value = '请至少选择一个服务端映射端口。'
+    validationError.value = '请至少选择一个已发布的隧道。'
     return
   }
 

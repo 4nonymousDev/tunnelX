@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"tunnelx/internal/config"
+	"tunnelx/internal/keyperm"
 	"tunnelx/internal/logbuf"
 	"tunnelx/internal/tunnel"
 )
@@ -30,7 +31,7 @@ func TestConnectRejectsMissingSettings(t *testing.T) {
 		wantSubstr string
 	}{
 		{"缺服务器地址", "", "tunnel_key", "尚未配置服务器地址"},
-		{"缺私钥路径", "1.2.3.4:2222", "", "尚未配置私钥路径"},
+		{"缺私钥路径", "1.2.3.4:2222", "", "请使用账号登录"},
 	}
 
 	for _, c := range cases {
@@ -45,6 +46,9 @@ func TestConnectRejectsMissingSettings(t *testing.T) {
 			if keyPath != "" {
 				keyPath = filepath.Join(dir, keyPath)
 				if err := os.WriteFile(keyPath, []byte("dummy"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := keyperm.Fix(keyPath); err != nil {
 					t.Fatal(err)
 				}
 			}

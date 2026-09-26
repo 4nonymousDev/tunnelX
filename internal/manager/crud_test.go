@@ -13,13 +13,16 @@ import (
 
 	"tunnelx/internal/config"
 	"tunnelx/internal/logbuf"
+	"tunnelx/internal/proto"
 	"tunnelx/internal/tunnel"
 )
 
 type onlineImportResolver struct{}
 
-func (onlineImportResolver) ResolveRemotePort(string, string, int) (int, bool) { return 80, true }
-func (onlineImportResolver) DescribeRegistry() []string                        { return nil }
+func (onlineImportResolver) ResolveTarget(id, fp, tid string, port int) (proto.Target, error) {
+	return proto.Target{ClientID: id, Fingerprint: "trusted", TunnelID: "web", SessionID: "session", Generation: 1}, nil
+}
+func (onlineImportResolver) DescribeRegistry() []string { return nil }
 
 func startListeningImport(t *testing.T, item *tunnel.Tunnel) {
 	t.Helper()

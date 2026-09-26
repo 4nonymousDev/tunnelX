@@ -19,20 +19,13 @@ import (
 
 	"tunnelx/internal/config"
 	"tunnelx/internal/logbuf"
+	"tunnelx/internal/proto"
 )
 
-// Resolver 供 Import 模式在每次（重）建立时查询对端的当前服务端端口。
-// 服务端端口是动态分配的，重连后大概率会变，因此不能记住端口号，必须按
-// 「对端身份 + 源端口」重新解析。
-// Resolver looks up the peer's current server port whenever an Import tunnel is
-// established or re-established. Dynamic ports must be resolved again by peer identity
-// and source port rather than cached across reconnects.
+// Resolver returns a verified target for each business connection.
 type Resolver interface {
-	// ResolveRemotePort 按稳定隧道 ID（旧配置按源端口）返回对端当前的服务端端口。
-	// 对端不在线时返回 ok=false，调用方据此进入 StatePeerOffline。
-	// ResolveRemotePort uses the stable tunnel ID, or source port for legacy configs,
-	// and returns ok=false for an offline peer so the caller enters StatePeerOffline.
-	ResolveRemotePort(peerID, peerTunnelID string, srcPort int) (port int, ok bool)
+	// Legacy source-port matching must identify exactly one verified publication.
+	ResolveTarget(peerID, fingerprint, peerTunnelID string, srcPort int) (proto.Target, error)
 
 	// DescribeRegistry 返回注册表中当前可选的对端，用于在解析失败时
 	// 告诉用户"实际有什么可用"——否则只报"对端不在线"，无法区分是
@@ -42,21 +35,9 @@ type Resolver interface {
 	DescribeRegistry() []string
 }
 
-// Publisher 供 Export 模式在拿到服务端分配的端口后上报。
-// 必须在 -R 建立、拿到实际端口之后调用——服务端端口是动态分配的，建立前无从
-// 得知。
-// Publisher reports an Export tunnel only after -R has returned the dynamically
-// allocated server port, which cannot be known beforehand.
+// Publisher owns the export publication and incoming v2 channels.
 type Publisher interface {
-	// Track 登记一条已建立的隧道。
-	// Track records an established tunnel.
-	Track(tunnelID, srcHost string, srcPort, remotePort int, name string)
-	// Untrack 注销一条隧道（停止或失败时）。
-	// Untrack removes a stopped or failed tunnel.
-	Untrack(tunnelID string)
-	// Publish 上报当前全部隧道的全量快照。
-	// Publish reports a full snapshot of all current tunnels.
-	Publish()
+	ServeExport(context.Context, config.Tunnel, func()) error
 }
 
 // Tunnel 是一条运行中的隧道。
@@ -76,6 +57,7 @@ type Tunnel struct {
 // New 创建隧道，尚未启动。onChange 在状态变化时调用，供 UI 刷新；可为 nil。
 // New creates but does not start a tunnel. onChange refreshes the UI and may be nil.
 func New(cfg config.Tunnel, log *logbuf.Buffer, onChange func()) *Tunnel {
+	config.EnsureTunnelID(&cfg)
 	return &Tunnel{
 		cfg:      cfg,
 		log:      log,
@@ -189,7 +171,7 @@ func (t *Tunnel) run(ctx context.Context, client *ssh.Client, res Resolver, pub 
 			return
 		}
 
-		wait := backoff.Next()
+		wait := backoff.NextFor(err)
 		t.log.Warnf(t.Label(), "%s；%s 后重试", fault.Reason, wait.Round(time.Second))
 		t.setStatus(Status{
 			State:   StateReconnecting,
@@ -213,135 +195,97 @@ func (t *Tunnel) serve(ctx context.Context, client *ssh.Client, res Resolver, pu
 }
 
 // serveExport 把本地端口推到服务器（-R 远程转发）。
-// serveExport publishes a local port through server-side -R forwarding.
+// serveExport publishes an explicit target on the shared v2 control connection.
 func (t *Tunnel) serveExport(ctx context.Context, client *ssh.Client, pub Publisher) error {
-	cfg := t.Config()
-
-	// 远端端口写 0，由服务端分配空闲端口。这消除了"远端端口冲突"这一整类
-	// 问题，也避免了自行"查询占用→挑选→绑定"的竞态。
-	// Request port zero so the server allocates a free port, eliminating remote-port
-	// conflicts and the check-select-bind race.
-	ln, err := client.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return fmt.Errorf("请求远程转发: %w", err)
+	if pub == nil {
+		return fatal(nil, "导出模式需要 v2 控制通道")
 	}
-	defer ln.Close()
-
-	remotePort := ln.Addr().(*net.TCPAddr).Port
-	local := net.JoinHostPort(localHost(cfg), fmt.Sprint(cfg.LocalPort))
-
-	t.log.Infof(t.Label(), "已建立：服务端 %d → %s", remotePort, local)
-	t.setStatus(Status{State: StateRunning, RemotePort: remotePort})
-
-	// 拿到实际端口后才能上报。
-	// Report only after receiving the actual port.
-	if pub != nil {
-		pub.Track(cfg.ID, localHost(cfg), cfg.LocalPort, remotePort, cfg.Name)
-		pub.Publish()
-		// 隧道结束时注销并重新上报，使注册表及时反映下线。
-		// Remove and republish on exit so the registry promptly reflects the tunnel going offline.
-		defer func() {
-			pub.Untrack(cfg.ID)
-			pub.Publish()
-		}()
-	}
-
-	go func() {
-		<-ctx.Done()
-		ln.Close() // 唤醒下方阻塞的 Accept / Wake the blocked Accept below.
-	}()
-
-	return t.acceptLoop(ctx, ln, func() (net.Conn, error) {
-		return net.DialTimeout("tcp", local, 10*time.Second)
-	})
+	return pub.ServeExport(ctx, t.Config(), func() { t.setStatus(Status{State: StateRunning}) })
 }
 
-// serveImport 在本地监听并把流量送到服务端（-L 本地转发）。
-// serveImport listens locally and sends traffic to the server using -L forwarding.
-func (t *Tunnel) serveImport(ctx context.Context, client *ssh.Client, res Resolver) error {
+func (t *Tunnel) resolveTarget(res Resolver) (proto.Target, error) {
 	cfg := t.Config()
-
-	// 控制通道客户端尚未实现时 res 为 nil。判为不可自愈——重试无从改变，
-	// 明确报错优于 panic 或静默无反应。
-	// A nil resolver means control-channel support is unavailable. Retrying cannot fix
-	// that, so return a clear fatal error instead of panicking or failing silently.
-	if res == nil {
-		return fatal(nil, "导入模式需要控制通道，该功能尚未实现")
+	target, err := res.ResolveTarget(cfg.PeerID, cfg.PeerFingerprint, cfg.PeerTunnelID, cfg.PeerSrcPort)
+	if err != nil {
+		return proto.Target{}, err
 	}
-
-	remotePort, ok := res.ResolveRemotePort(cfg.PeerID, cfg.PeerTunnelID, cfg.PeerSrcPort)
-	if !ok {
-		reason := fmt.Sprintf("对端 %s 当前不在线", peerLabel(cfg))
-		t.log.Warnf(t.Label(), "%s", reason)
-
-		// 把注册表实际内容打出来：配错对端身份或隧道 ID 与对端确实
-		// 未上线的症状完全相同，不列出可选项就无法区分。
-		// Log actual registry choices because bad peer IDs and genuinely offline peers
-		// otherwise look identical.
-		t.log.Infof(t.Label(), "本机查找条件：peer_id=%s peer_tunnel_id=%s peer_src_port=%d",
-			cfg.PeerID, cfg.PeerTunnelID, cfg.PeerSrcPort)
-		if avail := res.DescribeRegistry(); len(avail) == 0 {
-			t.log.Warnf(t.Label(), "注册表为空——尚无任何 Exporter 上报隧道")
-		} else {
-			t.log.Infof(t.Label(), "注册表当前可选对端（共 %d 条）：", len(avail))
-			for _, s := range avail {
-				t.log.Infof(t.Label(), "  %s", s)
+	if cfg.PeerFingerprint == "" || cfg.PeerTunnelID == "" {
+		if binder, ok := res.(interface {
+			BindTarget(string, proto.Target) error
+		}); ok {
+			if err := binder.BindTarget(cfg.ID, target); err != nil {
+				return proto.Target{}, fatal(err, "保存可信目标失败: %v", err)
 			}
 		}
-
-		t.setStatus(Status{State: StatePeerOffline, Reason: reason})
-		// 归为可重试：对端开机即可恢复。
-		// This is retryable because recovery occurs when the peer comes online.
-		return retryable(nil, "%s", reason)
+		t.mu.Lock()
+		t.cfg.PeerFingerprint = target.Fingerprint
+		t.cfg.PeerTunnelID = target.TunnelID
+		t.mu.Unlock()
 	}
+	return target, nil
+}
 
-	// 本地监听是纯本地操作，与 SSH 连接无关——因此"先查询、后转发"的时序
-	// 完全不需要第二条连接。
-	// 同时绑定 IPv4 与 IPv6 环回。
-	// 只绑 127.0.0.1 时，浏览器访问 http://localhost:PORT 若解析到 ::1 会直接
-	// 连接被拒——且连接根本到不了本程序，日志里不会有任何记录，极难排查。
-	// Windows 上 localhost 常优先解析为 ::1，故两个地址族都要监听。
-	// 注意 net.Listen("tcp", "localhost:PORT") 只会绑定其中一个地址族，
-	// 不能满足此需求，必须显式各绑一次。
-	// Local listening is independent of SSH and needs no second connection. Bind both
-	// IPv4 and IPv6 loopback explicitly because localhost often resolves to ::1 on Windows
-	// and net.Listen with "localhost" binds only one family.
-	lns, err := listenLoopback(cfg.ListenPort)
+// A local listener never caches a remote port. Every business connection resolves
+// and transmits the complete trusted target, including its current generation.
+func (t *Tunnel) serveImport(ctx context.Context, client *ssh.Client, res Resolver) error {
+	cfg := t.Config()
+	if res == nil {
+		return fatal(nil, "导入模式需要 v2 控制通道")
+	}
+	if _, err := t.resolveTarget(res); err != nil {
+		t.log.Warnf(t.Label(), "目标解析失败 peer_id=%s peer_tunnel_id=%s: %v", cfg.PeerID, cfg.PeerTunnelID, err)
+		t.log.Infof(t.Label(), "注册表当前可选对端: %v", res.DescribeRegistry())
+		t.setStatus(Status{State: StatePeerOffline, Reason: err.Error()})
+		return err
+	}
+	ln, err := listenLoopback(cfg.ListenPort)
 	if err != nil {
-		// 绑定失败时须精确到占用者，否则用户不知道该处理谁。
-		// Identify the owning process on bind failure so the user knows what to address.
-		return fmt.Errorf("监听本地端口 %d 失败: %w%s",
-			cfg.ListenPort, err, occupantHint(cfg.ListenPort))
+		return fmt.Errorf("监听本地端口 %d 失败: %w%s", cfg.ListenPort, err, occupantHint(cfg.ListenPort))
 	}
-	ln := lns
 	defer ln.Close()
-
-	t.log.Infof(t.Label(), "已建立：本地 %d → 服务端 %d（%s）",
-		cfg.ListenPort, remotePort, peerLabel(cfg))
-	t.setStatus(Status{State: StateRunning, RemotePort: remotePort})
-
+	t.setStatus(Status{State: StateRunning})
+	listenerDone := make(chan struct{})
+	defer close(listenerDone)
 	go func() {
-		<-ctx.Done()
-		ln.Close()
+		select {
+		case <-ctx.Done():
+			_ = ln.Close()
+		case <-listenerDone:
+		}
 	}()
-
-	target := fmt.Sprintf("127.0.0.1:%d", remotePort)
-	return t.acceptLoop(ctx, ln, func() (net.Conn, error) {
-		// 在已有 SSH 连接里开新 channel，不新建连接。
-		// Open a new channel on the existing SSH connection rather than creating another connection.
-		t.log.Debugf(t.Label(), "正在经 SSH 连接服务端 %s…", target)
-		c, err := client.Dial("tcp", target)
+	return t.acceptLoop(ctx, ln, func() (io.ReadWriteCloser, error) {
+		target, err := t.resolveTarget(res)
 		if err != nil {
 			return nil, err
 		}
-		t.log.Debugf(t.Label(), "已连通服务端 %s", target)
-		return c, nil
+		payload, err := proto.EncodeOpen(target)
+		if err != nil {
+			return nil, err
+		}
+		// OpenChannel has no context API. Closing this transport on the deadline
+		// ensures its pending operation exits rather than leaking a waiter.
+		deadline := time.AfterFunc(10*time.Second, func() { _ = client.Close() })
+		ch, reqs, err := client.OpenChannel(proto.OpenChannelType, payload)
+		deadline.Stop()
+		if err != nil {
+			return nil, err
+		}
+		go ssh.DiscardRequests(reqs)
+		if ctx.Err() != nil {
+			_ = ch.Close()
+			return nil, ctx.Err()
+		}
+		return ch, nil
 	})
 }
 
 // acceptLoop 接受连接并为每个连接建立双向转发。
 // acceptLoop accepts connections and establishes bidirectional forwarding for each one.
-func (t *Tunnel) acceptLoop(ctx context.Context, ln net.Listener, dial func() (net.Conn, error)) error {
+func (t *Tunnel) acceptLoop(ctx context.Context, ln net.Listener, dial func() (io.ReadWriteCloser, error)) error {
+	ctx, cancel := context.WithCancel(ctx)
+	var active sync.WaitGroup
+	defer func() { cancel(); active.Wait() }()
+	slots := make(chan struct{}, 32)
 	for {
 		in, err := ln.Accept()
 		if err != nil {
@@ -353,7 +297,16 @@ func (t *Tunnel) acceptLoop(ctx context.Context, ln net.Listener, dial func() (n
 
 		t.log.Debugf(t.Label(), "收到本地连接 %s", in.RemoteAddr())
 
+		select {
+		case slots <- struct{}{}:
+		default:
+			_ = in.Close()
+			continue
+		}
+		active.Add(1)
 		go func() {
+			defer active.Done()
+			defer func() { <-slots }()
 			defer in.Close()
 
 			out, err := dial()
@@ -364,6 +317,16 @@ func (t *Tunnel) acceptLoop(ctx context.Context, ln net.Listener, dial func() (n
 				return
 			}
 			defer out.Close()
+			finished := make(chan struct{})
+			defer close(finished)
+			go func() {
+				select {
+				case <-ctx.Done():
+					_ = in.Close()
+					_ = out.Close()
+				case <-finished:
+				}
+			}()
 
 			pipe(in, out)
 			t.log.Debugf(t.Label(), "连接 %s 已关闭", in.RemoteAddr())
@@ -379,11 +342,11 @@ func (t *Tunnel) acceptLoop(ctx context.Context, ln net.Listener, dial func() (n
 // pipe copies bidirectionally and returns only after both directions finish. Returning
 // after one direction would let deferred Close truncate the response. Instead, EOF in
 // one direction half-closes the peer's write side and lets the other direction drain.
-func pipe(a, b net.Conn) {
+func pipe(a, b io.ReadWriteCloser) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 
-	cp := func(dst, src net.Conn) {
+	cp := func(dst, src io.ReadWriteCloser) {
 		defer wg.Done()
 		io.Copy(dst, src)
 		// 半关闭：通知对端"我不再发送了"，但仍可继续接收。

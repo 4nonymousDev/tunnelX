@@ -16,6 +16,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"tunnelx/internal/config"
+	"tunnelx/internal/keyperm"
 	"tunnelx/internal/logbuf"
 	"tunnelx/internal/server"
 	"tunnelx/internal/tunnel"
@@ -44,16 +45,21 @@ func TestDeploymentFlow(t *testing.T) {
 
 	writePEMKey(t, hostKeyPath)
 	clientPub := writePEMKey(t, clientKeyPath)
+	publicKey, _, _, _, err := ssh.ParseAuthorizedKey(clientPub)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(authKeysPath, clientPub, 0o600); err != nil {
 		t.Fatalf("写入 authorized_keys: %v", err)
 	}
 
 	addr := reservePort(t)
 	srv, err := server.New(server.Config{
-		Addr:           addr,
-		HostKeyPath:    hostKeyPath,
-		AuthorizedKeys: authKeysPath,
-		Version:        "test",
+		Addr:             addr,
+		HostKeyPath:      hostKeyPath,
+		AuthorizedKeys:   authKeysPath,
+		Version:          "test",
+		IdentityBindings: map[string]string{"deploy-test-id": ssh.FingerprintSHA256(publicKey)},
 	}, func(f string, a ...any) { t.Logf("[server] "+f, a...) })
 	if err != nil {
 		t.Fatalf("创建服务端: %v", err)
@@ -92,6 +98,7 @@ func TestDeploymentFlow(t *testing.T) {
 	assertConfigRoundTrip(t, cfg)
 
 	log := logbuf.New(nil)
+	cfg.SetPathForTest(filepath.Join(dir, "config.json"))
 	defer dumpLog(t, log)
 
 	m := New(cfg, log, "0.1.0", func() {})
@@ -119,36 +126,39 @@ func TestDeploymentFlow(t *testing.T) {
 	// 4. Wait for the connection and tunnel to become ready.
 	waitConn(t, m, ConnConnected)
 
-	var remotePort int
+	var running bool
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		for _, tun := range m.Tunnels() {
-			st := tun.Status()
-			if st.State == tunnel.StateError {
-				t.Fatalf("隧道进入错误状态: %s", st.Reason)
-			}
-			if st.State == tunnel.StateRunning && st.RemotePort > 0 {
-				remotePort = st.RemotePort
-			}
-		}
-		if remotePort > 0 {
+		if m.Tunnels()[0].Status().State == tunnel.StateRunning {
+			running = true
 			break
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 	}
-	if remotePort == 0 {
-		t.Fatal("隧道未在超时内建立并取得服务端端口")
+	if !running {
+		t.Fatal("v2 export did not publish")
 	}
-	t.Logf("服务端已分配端口 %d", remotePort)
-
-	// 5. 经服务端分配的端口访问，数据应抵达本地服务
-	// 5. Connect through the server-assigned port; data must reach the local service.
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", remotePort), 5*time.Second)
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("连接服务端转发端口 %d: %v", remotePort, err)
+		t.Fatal(err)
+	}
+	importPort := probe.Addr().(*net.TCPAddr).Port
+	probe.Close()
+	if err := m.AddTunnel(config.Tunnel{ID: "import-echo", Kind: config.KindImport, Enabled: true, PeerID: cfg.ID, PeerTunnelID: cfg.Tunnels[0].ID, PeerSrcPort: echoPort, ListenPort: importPort}); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if m.Tunnels()[1].Status().State == tunnel.StateRunning {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", importPort), 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
 	}
 	defer conn.Close()
-
 	conn.SetDeadline(time.Now().Add(5 * time.Second))
 	want := "hello from server side"
 	if _, err := conn.Write([]byte(want)); err != nil {
@@ -259,6 +269,9 @@ func writePEMKey(t *testing.T, path string) []byte {
 	}
 	if err := os.WriteFile(path, pem.EncodeToMemory(block), 0o600); err != nil {
 		t.Fatalf("写入私钥: %v", err)
+	}
+	if err := keyperm.Fix(path); err != nil {
+		t.Fatal(err)
 	}
 	sshPub, err := ssh.NewPublicKey(pub)
 	if err != nil {

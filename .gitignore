@@ -32,6 +32,20 @@ startup.log
 audit.jsonl
 .tunnelx-control.json
 .tunnelx-ui.json
+admin.token
+admin.token.*
+tunnel-server.db
+tunnel-server.db-*
+tunnel-server.db.*
+.authorized_keys-*.tmp
+/data/
+/keys/
+interface-lock.json
+interface-lock.json.*.tmp
+config.json.tmp
+.tunnelx-control.json.tmp
+*.backup
+*.pre-v2.bak
 .codex-tmp/
 
 # ---- 构建产物 ----
@@ -58,6 +72,7 @@ audit.jsonl
 # ---- Local material (not published) ----
 /docs/
 /AGENTS.md
+/UPGRADE_RESULT.md
 
 # ---- Go ----
 # ---- Go ----

@@ -19,7 +19,31 @@ const ChannelType = "tunnel-ctrl@tunnelx"
 // Version 是当前协议版本。连接后第一条消息即交换版本，不匹配立即报错终止。
 // Version is the current protocol version. Peers exchange it in the first message and
 // terminate immediately on a mismatch.
-const Version = 1
+const Version = 2
+
+const (
+	OpenChannelType    = "tunnel-open-v2@tunnelx"
+	ForwardChannelType = "tunnel-forward-v2@tunnelx"
+	MaxOpenBytes       = 4096
+)
+
+// Target identifies one committed publication on one authenticated SSH session.
+type Target struct {
+	ClientID    string `json:"client_id"`
+	Fingerprint string `json:"fingerprint"`
+	TunnelID    string `json:"tunnel_id"`
+	SessionID   string `json:"session_id"`
+	Generation  uint64 `json:"generation"`
+}
+
+type OpenRequest struct {
+	V      int    `json:"v"`
+	Target Target `json:"target"`
+}
+
+func (t Target) Valid() bool {
+	return t.ClientID != "" && t.Fingerprint != "" && t.TunnelID != "" && t.SessionID != "" && t.Generation > 0
+}
 
 // 消息类型。
 // Message types.
@@ -67,6 +91,8 @@ type HelloOK struct {
 	V             int    `json:"v"`
 	Type          string `json:"type"`
 	ServerVersion string `json:"server_version"`
+	SessionID     string `json:"session_id"`
+	Fingerprint   string `json:"fingerprint"`
 }
 
 // TunnelSpec 是 Exporter 上报的单条隧道。
@@ -75,18 +101,13 @@ type TunnelSpec struct {
 	TunnelID   string `json:"tunnel_id,omitempty"` // 导出隧道稳定 ID；新版本的匹配依据 / Stable exported-tunnel ID used for matching.
 	SrcHost    string `json:"src_host,omitempty"`  // 本地目标地址，仅供识别与展示 / Local target address for identification and display only.
 	SrcPort    int    `json:"src_port"`            // 本地源端口 / Local source port.
-	RemotePort int    `json:"remote_port"`         // 服务端实际分配的端口 / Port actually assigned by the server.
+	RemotePort int    `json:"remote_port"`         // Deprecated wire field; must be zero in v2.
 	Name       string `json:"name"`                // 隧道名，可选；空则 UI 显示端口号 / Optional name; the UI falls back to the port.
 }
 
-// Publish 是 Exporter 上报隧道列表（C→S）。
-// 必须在 -R 建立、拿到服务端分配的实际端口之后才能发送。
-// 全量快照，不是增量：每次变化都发完整列表。增量同步一旦丢失一条消息，两端将
-// 永久不一致且难以察觉。
-// Publish reports an exporter's tunnels (client to server).
-// It can be sent only after -R has been established and the server has assigned the
-// actual port. It is a full snapshot, not a delta: every change sends the complete
-// list, avoiding silent permanent divergence when an incremental update is lost.
+// Publish atomically replaces the session's exported tunnel metadata.
+// The server returns exact session-bound targets in PublishOK before the
+// exporter accepts forwarding channels for a newly committed generation.
 type Publish struct {
 	V       int          `json:"v"`
 	Type    string       `json:"type"`
@@ -96,28 +117,37 @@ type Publish struct {
 // PublishOK 是上报成功响应（S→C）。
 // PublishOK acknowledges a successful report (server to client).
 type PublishOK struct {
-	V    int    `json:"v"`
-	Type string `json:"type"`
+	V       int      `json:"v"`
+	Type    string   `json:"type"`
+	Targets []Target `json:"targets"`
 }
 
 // RegistryEntry 是注册表中的一条在线隧道。
 // RegistryEntry describes one online tunnel in the registry.
 type RegistryEntry struct {
-	ID            string    `json:"id"`                  // Exporter UUID，重连匹配依据 / Exporter UUID used to match reconnects.
-	Name          string    `json:"name"`                // 机器显示名 / Machine display name.
-	TunnelID      string    `json:"tunnel_id,omitempty"` // 导出隧道稳定 ID / Stable exported-tunnel ID.
-	SrcHost       string    `json:"src_host,omitempty"`  // Exporter 的目标地址 / Exporter's target address.
-	SrcPort       int       `json:"src_port"`            // 显示、Importer 默认值与旧配置兼容匹配 / Display, importer default, and legacy match port.
-	RemotePort    int       `json:"remote_port"`         // Importer 实际要连的服务端端口 / Server port actually used by the importer.
-	TunnelName    string    `json:"tunnel_name"`         // 显示用，可为空 / Optional display name.
-	Since         time.Time `json:"since"`               // 上线时间 / Time connected.
-	ClientVersion string    `json:"client_version"`
+	Fingerprint      string    `json:"fingerprint"`
+	SessionID        string    `json:"session_id"`
+	Generation       uint64    `json:"generation"`
+	IdentityVerified bool      `json:"identity_verified"`
+	ID               string    `json:"id"`                  // Exporter UUID，重连匹配依据 / Exporter UUID used to match reconnects.
+	Name             string    `json:"name"`                // 机器显示名 / Machine display name.
+	TunnelID         string    `json:"tunnel_id,omitempty"` // 导出隧道稳定 ID / Stable exported-tunnel ID.
+	SrcHost          string    `json:"src_host,omitempty"`  // Exporter 的目标地址 / Exporter's target address.
+	SrcPort          int       `json:"src_port"`            // 显示、Importer 默认值与旧配置兼容匹配 / Display, importer default, and legacy match port.
+	RemotePort       int       `json:"remote_port"`         // Deprecated display field; always zero in v2.
+	TunnelName       string    `json:"tunnel_name"`         // 显示用，可为空 / Optional display name.
+	Since            time.Time `json:"since"`               // 上线时间 / Time connected.
+	ClientVersion    string    `json:"client_version"`
+}
+
+func (e RegistryEntry) Target() Target {
+	return Target{ClientID: e.ID, Fingerprint: e.Fingerprint, TunnelID: e.TunnelID, SessionID: e.SessionID, Generation: e.Generation}
 }
 
 // Registry 是服务端下发的注册表（S→C，全量快照）。
 // Importer 握手后收到一次，此后每次注册表变化服务端主动广播。因 Importer 不上报
 // "正在连谁"，故为广播而非精准推送——各 Importer 自行比对"我连的 UUID 还在吗"。
-// 、。
+
 // Registry is the full registry snapshot sent by the server (server to client).
 // An importer receives it after the handshake and whenever the registry changes.
 // Because importers do not report which peer they use, the server broadcasts and each
@@ -158,19 +188,26 @@ func (e *Error) Error() string {
 // port-allocation failure and server busy are retryable; bad request indicates a
 // client bug and is not recoverable; internal errors are retryable.
 const (
-	CodeVersionMismatch = "version_mismatch"  // 不可自愈：提示用户升级 / Unrecoverable: ask the user to upgrade.
-	CodeDuplicateID     = "duplicate_id"      // 不可自愈：UUID 已被占用 / Unrecoverable: UUID already in use.
-	CodePortAllocFailed = "port_alloc_failed" // 可自愈：退避重试 / Recoverable: retry with backoff.
-	CodeServerBusy      = "server_busy"       // 可自愈：退避重试 / Recoverable: retry with backoff.
-	CodeBadRequest      = "bad_request"       // 不可自愈：客户端 bug / Unrecoverable: client bug.
-	CodeInternalError   = "internal_error"    // 可自愈：退避重试 / Recoverable: retry with backoff.
+	CodeVersionMismatch    = "version_mismatch"  // 不可自愈：提示用户升级 / Unrecoverable: ask the user to upgrade.
+	CodeDuplicateID        = "duplicate_id"      // 不可自愈：UUID 已被占用 / Unrecoverable: UUID already in use.
+	CodePortAllocFailed    = "port_alloc_failed" // 可自愈：退避重试 / Recoverable: retry with backoff.
+	CodeServerBusy         = "server_busy"       // 可自愈：退避重试 / Recoverable: retry with backoff.
+	CodeBadRequest         = "bad_request"       // 不可自愈：客户端 bug / Unrecoverable: client bug.
+	CodeInternalError      = "internal_error"    // 可自愈：退避重试 / Recoverable: retry with backoff.
+	CodeIdentityUnverified = "identity_unverified"
+	CodeIdentityMismatch   = "identity_mismatch"
+	CodeAmbiguousTarget    = "ambiguous_target"
+	CodePeerOffline        = "peer_offline"
+	CodeStaleTarget        = "stale_target"
+	CodePublishTooLarge    = "publish_too_large"
+	CodeRegistryCapacity   = "registry_capacity"
 )
 
 // Retryable 报告该错误码是否可通过重试自愈。
 // Retryable reports whether retrying can recover from the error code.
 func Retryable(code string) bool {
 	switch code {
-	case CodePortAllocFailed, CodeServerBusy, CodeInternalError:
+	case CodePortAllocFailed, CodeServerBusy, CodeInternalError, CodePeerOffline, CodeStaleTarget, CodeIdentityUnverified:
 		return true
 	default:
 		return false

@@ -33,8 +33,7 @@ type Result struct {
 	// Readers lists readable principals other than the current user and SYSTEM for a useful warning.
 	Readers []string
 	// Err 非 nil 表示检查本身失败（如文件不存在、API 调用出错）。
-	// 检查失败不应阻断连接——放行并在日志中留痕即可。
-	// Err reports a failure of the check itself; such failures are logged but do not block a connection.
+	// Err reports a failure of the check itself; callers must stop before using a secret.
 	Err error
 }
 

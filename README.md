@@ -13,8 +13,8 @@
 │ nginx :80    │            │             │            │ 浏览器访问    │
 │      ▲       │            │             │            │ localhost:80 │
 │      │       │            │             │            │      │       │
-│  TunnelX  ═══╪═══ SSH ═══▶│  :41273 ◄───┼═══ SSH ═══╪══ TunnelX    │
-│   [导出]     │            │ （仅环回）   │            │   [导入]      │
+│  TunnelX  ═══╪═══ SSH ═══▶│ 身份校验转发 ┼═══ SSH ═══╪══ TunnelX    │
+│   [导出]     │            │ 无中转端口   │            │   [导入]      │
 └──────────────┘            └─────────────┘            └──────────────┘
 ```
 
@@ -24,8 +24,10 @@
 - Windows 桌面端采用 Electron + Vue，通过本地 API 连接独立 Go 核心。
 - 客户端、CLI 和服务端均可构建为单文件，不依赖系统 OpenSSH。
 - 服务端单二进制内嵌管理 REST API 和 Vue 管理后台，历史与审计持久化到 SQLite。
-- 导入侧按机器标识和源端口解析隧道，不依赖服务端动态分配的端口。
-- 服务端不开放 shell，转发目标限制为环回地址。
+- 导入侧绑定已核验的设备、公钥与隧道 ID，每次连接核对当前会话和发布版本。
+- 服务端不开放 shell，不接受任意服务器地址或端口转发。
+
+已有实例请先阅读 [安全升级操作说明](UPGRADE_GUIDE.md)。账号登录需要更新 server 与客户端，原密钥和配置继续使用；尚未纳入账号的已授权 v2 客户端仍可沿用原手工授权规则。
 
 ## 快速开始
 
@@ -42,7 +44,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
   go build -ldflags "-s -w" -o tunnel-server-linux-amd64 ./cmd/tunnel-server
 
 # 上传并一键安装
-scp deploy/install.sh tunnel-server-linux-amd64 user@your-server:~/
+scp deploy/install.sh deploy/upgrade.sh tunnel-server-linux-amd64 user@your-server:~/
 ssh user@your-server 'chmod +x install.sh && sudo ./install.sh'
 ```
 
@@ -57,58 +59,33 @@ ssh -L 2223:127.0.0.1:2223 user@your-server
 # 浏览 http://127.0.0.1:2223
 ```
 
-### 2. 生成并登记密钥
+### 2. 管理员创建账号
 
-**生成**：双击运行 `tunnelx.exe`，点「设置」，在「私钥」一行点「生成」。
-输入用户名和邮箱后，客户端会生成无密码短语的 ed25519 密钥；用户名、邮箱和
-计算机名以明文 JSON 写入 `.pub` 注释，供管理员识别，不参与 SSH 认证。
-不需要安装 OpenSSH，也不用敲命令。
+在管理后台侧栏打开「账号管理 → 创建账号」，设置用户名、密码、设备上限和操作原因。
+默认允许 10 台设备，可选 1–50 台。通过可信渠道把服务器地址、账号和密码交给用户；不提供自助注册。
 
-**登记**：打开管理页面的「客户端管理」，点「导入 .pub」，选择刚生成的
-`tunnel_key.pub`。页面会从注释中自动填写用户名、邮箱和计算机名；确认后公钥
-立即加入授权列表并写入管理审计。
+### 3. 客户端账号登录
 
-也可以手工把公钥追加到服务端的 authorized_keys：
+打开升级后的桌面客户端，点击「账号登录」，填写服务器地址（如 `your-server.com:2222`）、
+设备名称、账号和密码。核对首次显示的服务器指纹后，程序会自动登记设备并连接。
+无需上传 `.pub` 或手工填写设备 ID；已有私钥、设备 ID 和隧道继续保留，缺少私钥时自动生成。
+密码只用于本次登录，不写入配置或日志。账号不是 Linux 系统账户；普通账号没有后台管理权限。后台使用显式创建的管理员账号登录，刷新保留会话，见[管理后台登录](ADMIN_LOGIN_GUIDE.md)。
 
-```bash
-ssh user@your-server \
-  'sudo tee -a /etc/tunnel-server/authorized_keys' # 粘贴公钥后回车，Ctrl-D 结束
-```
-
-约 2 秒生效，无需重启服务。
+正常重启或短暂断线后，设备使用本机凭据重连。管理员禁用账号或重置密码会断开其全部会话；
+重新启用后也需要再次输入当前密码登录，不会自动恢复。详见 [账号密码接入](ACCOUNT_LOGIN_GUIDE.md)。
 
 <details>
-<summary>也可以用 ssh-keygen 生成（批量部署、服务端操作时更顺手）</summary>
+<summary>高级：存量公钥与身份管理</summary>
 
-```bash
-# 在你的机器上生成隧道专用密钥
-ssh-keygen -t ed25519 -f tunnel_key -N ""
+尚未纳入账号的已授权 v2 设备，仍可按原 `authorized_keys` 与身份绑定规则连接。
+管理页「设备与高级管理 → 高级：存量公钥与身份管理」保留原公钥登记、原 ID 绑定、换绑和撤销入口。
+仅手工追加公钥不会建立可信设备 ID；历史自报 ID 也不会自动获得信任。
+授权文件约 2 秒热更新，不接受 `from=`、`command=` 等尚未支持的选项；手工编辑时暂停管理端导入，避免并发覆盖。
 
-# 把公钥登记到服务端（约 2 秒生效，无需重启服务）
-cat tunnel_key.pub | ssh user@your-server \
-  'sudo tee -a /etc/tunnel-server/authorized_keys > /dev/null'
-```
-
-生成的密钥与界面生成的完全等价——同为无密码短语的 ed25519。
+原设备登录管理员创建的账号后，会保留原身份并纳入账号管理。此后即使公钥仍在 `authorized_keys`，
+也不能绕过账号禁用、密码重置或设备撤销。不要复用能登录服务器系统账户的私钥。
 
 </details>
-
-> **不要复用服务器的登录密钥。** 那把密钥能开 root shell，分发到各台客户端
-> 等于把服务器权限一并交出去，且某台泄露时无法单独撤销。
-
-### 3. 配置客户端
-
-回到「设置」窗口填写其余字段（上一步界面生成的密钥已自动填好私钥栏）：
-
-| 字段 | 示例 |
-|---|---|
-| 服务器 | `your-server.com:2222` |
-| 私钥 | `tunnel_key` |
-
-SSH 用户名是客户端内部协议值，不再需要配置，也不对应服务器上的系统账户。
-
-用 `ssh-keygen` 生成的密钥，把 `tunnel_key` 与 `tunnelx.exe` 放在同一目录，
-私钥栏填文件名即可；也可以点「浏览…」选择。
 
 ### 4. 建立隧道
 
@@ -122,8 +99,10 @@ SSH 用户名是客户端内部协议值，不再需要配置，也不对应服�
 
 ## 配置文件
 
-界面上的所有配置都存在 `tunnelx.exe` 同目录的 `config.json` 里。
+桌面端配置默认保存在 Electron `userData/config.json`，CLI 使用指定的配置文件。
 通常不需要手工编辑，但批量部署时直接分发配置文件更方便。
+
+客户端配置 schema 保持为 2；服务端数据库升级为 schema 5。迁移保留原身份、密钥和隧道，升级前先备份，见 [安全升级操作说明](UPGRADE_GUIDE.md)。
 
 完整示例见 [config.example.json](config.example.json)，含每个字段的说明。
 
@@ -157,7 +136,7 @@ SSH 用户名是客户端内部协议值，不再需要配置，也不对应服�
 `127.0.0.1:80`、`192.168.1.50:80` 等不同地址上的相同端口。`id` 留空时
 客户端会自动生成；手工填写时必须保证每条隧道都不同。
 
-服务端端口由服务器自动分配，**无需也无法指定**。
+服务端直接转发到核验后的出口 SSH 连接，不再分配中转端口。
 
 ### 导入隧道（接入他人分享的端口）
 
@@ -186,16 +165,28 @@ SSH 用户名是客户端内部协议值，不再需要配置，也不对应服�
 
 `enabled` 为 `false` 表示暂时停用：配置保留，但不建立隧道。
 
-同一 Exporter 导出多个相同端口时，`tunnel-server`、导出客户端和导入客户端都需
-升级到支持 `tunnel_id` 的版本。旧导入配置没有 `peer_tunnel_id` 时仍按
-`peer_id + peer_src_port` 匹配，保持兼容，但无法区分同一对端的两个相同端口。
+旧导入配置没有 `peer_tunnel_id` 时，只在可信注册表中的 `peer_id + peer_src_port`
+唯一匹配后补齐目标；存在多个匹配时拒绝猜测。v1 程序需要升级到 v2。
 
 ## Linux CLI 客户端
 
 `tunnelx-cli` 是无 CGO 的通用 Linux 客户端，不依赖 Debian 或 systemd。
 同一架构的静态 ELF 可用于 Debian、Ubuntu、RHEL、Fedora、Arch、Alpine 等主流发行版。
 
-### 生成客户端密钥
+### 账号登录
+
+配置好服务器地址后，先运行核心，再在另一终端登录：
+
+```bash
+./tunnelx-cli run --confirm-via-api
+# 另一终端，使用相同配置路径
+./tunnelx-cli login --username alice
+```
+
+密码在终端中隐藏输入，不通过命令行参数传入。原密钥自动沿用，缺少时生成；无需提交 `.pub`。
+首次主机指纹仍需核对，操作细节见 [账号密码接入](ACCOUNT_LOGIN_GUIDE.md)。
+
+### 高级：生成存量管理用密钥
 
 CLI 可以直接生成隧道专用密钥，不依赖系统 `ssh-keygen`：
 
@@ -207,12 +198,12 @@ CLI 可以直接生成隧道专用密钥，不依赖系统 `ssh-keygen`：
 ```
 
 `--output` 默认为当前目录的 `tunnel_key`。命令不会覆盖已有的私钥或 `.pub`；
-用户名、邮箱和自动读取的计算机名会以明文 JSON 写入 `.pub` 注释，之后可在
+主动填写的用户名、邮箱会以明文 JSON 写入 `.pub` 注释（均可留空，不自动读取计算机名），之后可在
 服务端管理页面直接导入。
 
 ### 便携运行
 
-把 `tunnelx-cli`、`config.json` 和 `tunnel_key` 放在同一目录：
+配置服务器地址，保留已有 `config.json` 与私钥；新设备可在首次账号登录时自动生成私钥：
 
 ```bash
 chmod +x tunnelx-cli
@@ -300,19 +291,20 @@ tunnelx-cli 控制命令 ─┘          ▲
 | [BUILD.md](BUILD.md) | 构建说明、目录结构、测试、排查问题 |
 | [DEPLOY.md](DEPLOY.md) | 完整部署指南、密钥规划、防火墙、审计日志 |
 | [deploy/README.md](deploy/README.md) | 一键安装脚本用法 |
+| [ACCOUNT_LOGIN_GUIDE.md](ACCOUNT_LOGIN_GUIDE.md) | 管理员建号、自动设备登记与重新登录 |
 
 ## 与同类工具的区别
 
 | | TunnelX | frp / ngrok | Dev Tunnels |
 |---|---|---|---|
 | 传输 | SSH | 自定义协议 / HTTP | HTTPS |
-| 认证 | SSH 公钥 | Token | 微软账号 |
+| 认证 | 账号登录登记设备，之后使用设备公钥 | Token | 微软账号 |
 | 服务端 | 自建 | 自建 / 官方 | 官方托管 |
 | 客户端 | 无 UI 核心 + 桌面/CLI 前端 | 命令行 + 配置文件 | VSCode 插件 / CLI |
 | 依赖 | 无 | 无 | VSCode / .NET |
 
-选择 SSH 而非自定义协议的原因：认证与加密由 `golang.org/x/crypto/ssh` 提供，
-**不自写一行认证代码**——那是最容易出漏洞的地方。详见下方「安全说明」。
+SSH 传输加密和公钥验证由 `golang.org/x/crypto/ssh` 提供；账号密码用于受限的设备登记流程，
+服务器保存加盐密码哈希，不保存明文密码。详见 [账号密码接入](ACCOUNT_LOGIN_GUIDE.md)。
 
 ## 系统要求
 
@@ -327,10 +319,10 @@ tunnelx-cli 控制命令 ─┘          ▲
 
 ## 安全说明
 
-- 服务端转发端口**硬编码绑定 `127.0.0.1`**，内网服务不会直接暴露在公网
-- Importer 的转发目标同样限制为环回地址，服务端不能被用作跳板
-- 服务端只接受公钥认证，不开放密码认证
-- 管理 API 只允许监听明确的 loopback 地址，并要求 Bearer Token
+- 服务端按设备、公钥、隧道 ID、会话和发布代际精确转发，不开中转端口或 shell
+- 拒绝任意服务器地址及旧式 TCP 端口转发
+- 密码登录只能登记设备；业务连接使用设备公钥。账号禁用和密码重置不能通过旧授权文件绕过
+- 管理 API 只允许监听明确的 loopback 地址，要求管理员账号登录；HttpOnly 会话 Cookie 保持登录，写操作校验来源和 CSRF，旧 Bearer Token 无效
 - 客户端在线状态只在内存；资料、黑名单和新审计写入纯 Go SQLite
 - 客户端会检查私钥权限：Windows 使用 ACL，Unix 使用文件权限位
 - 首次连接服务器时展示主机指纹供核对，之后严格校验（防中间人）

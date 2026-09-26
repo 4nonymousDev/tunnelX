@@ -3,6 +3,7 @@ import type {
   KeyGenerationRequestDTO,
   KeyGenerationResultDTO,
   LogDTO,
+  LoginRequestDTO,
   SettingsDTO,
   SnapshotDTO,
   TunnelConfigDTO,
@@ -12,6 +13,7 @@ export const IPC = {
   bootstrap: 'tunnelx:bootstrap',
   refresh: 'tunnelx:refresh',
   connect: 'tunnelx:connect',
+  login: 'tunnelx:login',
   disconnect: 'tunnelx:disconnect',
   addTunnel: 'tunnelx:tunnel:add',
   addTunnels: 'tunnelx:tunnel:add-batch',
@@ -89,6 +91,7 @@ export interface TunnelXDesktopAPI {
   bootstrap(): Promise<BootstrapResult>
   refresh(): Promise<SnapshotDTO>
   connect(): Promise<SnapshotDTO>
+  login(request: LoginRequestDTO): Promise<SnapshotDTO>
   disconnect(): Promise<SnapshotDTO>
   addTunnel(tunnel: TunnelConfigDTO): Promise<SnapshotDTO>
   addTunnels(tunnels: TunnelConfigDTO[]): Promise<SnapshotDTO>

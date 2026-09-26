@@ -2,9 +2,8 @@ package adminapi
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
-	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -19,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"tunnelx/internal/store"
 	"unicode/utf8"
 )
 
@@ -30,10 +30,13 @@ var hashedAssetPattern = regexp.MustCompile(`(?:^|[-.])[A-Za-z0-9_-]{8,}\.[A-Za-
 
 type Server struct {
 	backend   Backend
-	token     []byte
+	auth      AuthBackend
+	logins    adminLoginLimiter
+	sessions  browserSessions
 	hub       *eventHub
 	assets    fs.FS
 	heartbeat time.Duration
+	requests  chan struct{}
 }
 
 type Option func(*Server) error
@@ -57,14 +60,14 @@ func WithHeartbeat(d time.Duration) Option {
 	}
 }
 
-func New(backend Backend, bearerToken string, options ...Option) (*Server, error) {
+func New(backend Backend, auth AuthBackend, options ...Option) (*Server, error) {
 	if backend == nil {
 		return nil, errors.New("adminapi: nil backend")
 	}
-	if bearerToken == "" {
-		return nil, errors.New("adminapi: empty bearer token")
+	if auth == nil {
+		return nil, errors.New("adminapi: nil account authentication backend")
 	}
-	s := &Server{backend: backend, token: []byte(bearerToken), hub: newEventHub(), assets: embeddedAssets(), heartbeat: 20 * time.Second}
+	s := &Server{backend: backend, auth: auth, hub: newEventHub(), assets: embeddedAssets(), heartbeat: 20 * time.Second, requests: make(chan struct{}, 64)}
 	for _, option := range options {
 		if err := option(s); err != nil {
 			return nil, err
@@ -81,7 +84,7 @@ func (s *Server) Publish(eventType string, data any) bool {
 	}
 	return s.hub.publish(Event{Type: eventType, Data: data})
 }
-func (s *Server) Close() error { s.hub.close(); return nil }
+func (s *Server) Close() error { s.sessions.clear(); s.hub.close(); return nil }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	requestID := newRequestID()
@@ -89,8 +92,34 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	setSecurityHeaders(w)
 	if strings.HasPrefix(r.URL.Path, "/api/") {
 		w.Header().Set("Cache-Control", "no-store")
-		if !s.authorized(r.Header.Get("Authorization")) {
-			writeError(w, http.StatusUnauthorized, "unauthorized", "valid bearer token required", requestID)
+		if !validBrowserOrigin(r) {
+			writeError(w, http.StatusForbidden, "invalid_origin", "same-origin management access required", requestID)
+			return
+		}
+		select {
+		case s.requests <- struct{}{}:
+			defer func() { <-s.requests }()
+		default:
+			writeError(w, 503, "busy", "management request limit reached", requestID)
+			return
+		}
+		r = r.WithContext(context.WithValue(r.Context(), requestInfoKey{}, RequestInfo{RemoteAddr: r.RemoteAddr, RequestID: requestID}))
+		if r.URL.EscapedPath() == "/api/v1/auth/login" {
+			s.serveLogin(w, r, requestID)
+			return
+		}
+		identity, ok := s.browserIdentity(r, true)
+		if !ok {
+			clearSessionCookie(w, r)
+			writeError(w, http.StatusUnauthorized, "unauthorized", "administrator login required", requestID)
+			return
+		}
+		if !safeMethod(r.Method) && !validCSRF(r, identity.CSRF) {
+			writeError(w, http.StatusForbidden, "invalid_csrf", "valid CSRF token required", requestID)
+			return
+		}
+		r = r.WithContext(context.WithValue(r.Context(), requestInfoKey{}, RequestInfo{RemoteAddr: r.RemoteAddr, RequestID: requestID, Operator: "account:" + identity.Username}))
+		if s.serveAuth(w, r, requestID, identity) {
 			return
 		}
 		s.serveAPI(w, r, requestID)
@@ -99,17 +128,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.serveStatic(w, r, requestID)
 }
 
-func (s *Server) authorized(header string) bool {
-	const prefix = "Bearer "
-	if !strings.HasPrefix(header, prefix) {
-		return false
-	}
-	candidate := sha256.Sum256([]byte(strings.TrimPrefix(header, prefix)))
-	want := sha256.Sum256(s.token)
-	return subtle.ConstantTimeCompare(candidate[:], want[:]) == 1
-}
-
 func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request, rid string) {
+	if s.serveAccounts(w, r, rid) {
+		return
+	}
+	if s.serveGovernance(w, r, rid) {
+		return
+	}
 	escaped := r.URL.EscapedPath()
 	switch {
 	case escaped == "/api/v1/overview":
@@ -150,22 +175,27 @@ func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request, rid string) {
 		if !decodeJSON(w, r, rid, &b) {
 			return
 		}
+		clientID := strings.TrimSpace(b.ClientID)
+		if !store.ValidClientID(clientID) {
+			bad(w, rid, errors.New("client_id must contain 1–128 characters without control characters"))
+			return
+		}
 		publicKey, e := validText(b.PublicKey, 1, 16384, "public_key")
 		if e != nil {
 			bad(w, rid, e)
 			return
 		}
-		username, e := validText(b.Username, 1, 128, "username")
+		username, e := validText(b.Username, 0, 128, "username")
 		if e != nil {
 			bad(w, rid, e)
 			return
 		}
-		email, e := validText(b.Email, 3, 254, "email")
+		email, e := validText(b.Email, 0, 254, "email")
 		if e != nil {
 			bad(w, rid, e)
 			return
 		}
-		computerName, e := validText(b.ComputerName, 1, 255, "computer_name")
+		computerName, e := validText(b.ComputerName, 0, 255, "computer_name")
 		if e != nil {
 			bad(w, rid, e)
 			return
@@ -175,7 +205,7 @@ func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request, rid string) {
 			bad(w, rid, e)
 			return
 		}
-		v, e := s.backend.ImportPublicKey(r.Context(), ImportPublicKeyRequest{PublicKey: publicKey, Username: username, Email: email, ComputerName: computerName, Reason: reason})
+		v, e := s.backend.ImportPublicKey(r.Context(), ImportPublicKeyRequest{ClientID: clientID, PublicKey: publicKey, Username: username, Email: email, ComputerName: computerName, Reason: reason})
 		s.respondCreated(w, rid, v, e)
 	case strings.HasPrefix(escaped, "/api/v1/clients/"):
 		s.serveClient(w, r, rid, strings.TrimPrefix(escaped, "/api/v1/clients/"))
@@ -340,6 +370,7 @@ type blockBody struct {
 	ExpiresAt *time.Time `json:"expires_at"`
 }
 type importKeyBody struct {
+	ClientID     string `json:"client_id"`
 	PublicKey    string `json:"public_key"`
 	Username     string `json:"username"`
 	Email        string `json:"email"`
@@ -473,6 +504,19 @@ func bad(w http.ResponseWriter, rid string, e error) {
 	writeError(w, http.StatusBadRequest, "invalid_request", e.Error(), rid)
 }
 func writeBackendError(w http.ResponseWriter, rid string, e error) {
+	if errors.Is(e, store.ErrAccountBusy) {
+		writeError(w, http.StatusServiceUnavailable, "busy", "login service busy; retry later", rid)
+		return
+	}
+	if errors.Is(e, store.ErrCommitOutcomeUnknown) {
+		writeError(w, http.StatusServiceUnavailable, "commit_uncertain", "transaction outcome is uncertain; admissions are paused. Inspect the database and restart the server before retrying", rid)
+		return
+	}
+	var pending *PendingOperationError
+	if errors.As(e, &pending) {
+		writeJSON(w, http.StatusAccepted, map[string]string{"operation_id": pending.ID, "state": "needs_reconcile", "message": "operation may have taken effect; inspect operation status before retrying"})
+		return
+	}
 	status := http.StatusInternalServerError
 	code := "internal_error"
 	msg := "internal server error"
@@ -540,21 +584,36 @@ func safeCSV(v string) string {
 }
 
 func (s *Server) serveEvents(w http.ResponseWriter, r *http.Request) {
-	f, ok := w.(http.Flusher)
+	_, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "stream_unsupported", "streaming unsupported", w.Header().Get("X-Request-ID"))
 		return
 	}
 	ch, cancel, ok := s.hub.subscribe()
 	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "stream_limit", "event stream capacity reached", w.Header().Get("X-Request-ID"))
 		return
 	}
 	defer cancel()
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
-	_, _ = io.WriteString(w, ": connected\n\n")
-	f.Flush()
+	controller := http.NewResponseController(w)
+	write := func(value string) bool {
+		if _, valid := s.browserIdentity(r, false); !valid {
+			return false
+		}
+		if err := controller.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			return false
+		}
+		if _, err := io.WriteString(w, value); err != nil {
+			return false
+		}
+		return controller.Flush() == nil
+	}
+	if !write(": connected\n\n") {
+		return
+	}
 	ticker := time.NewTicker(s.heartbeat)
 	defer ticker.Stop()
 	for {
@@ -566,11 +625,13 @@ func (s *Server) serveEvents(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			b, _ := json.Marshal(e.Data)
-			_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", e.Type, b)
-			f.Flush()
+			if !write(fmt.Sprintf("event: %s\ndata: %s\n\n", e.Type, b)) {
+				return
+			}
 		case <-ticker.C:
-			_, _ = io.WriteString(w, ": heartbeat\n\n")
-			f.Flush()
+			if !write(": heartbeat\n\n") {
+				return
+			}
 		}
 	}
 }

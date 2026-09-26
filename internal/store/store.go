@@ -13,32 +13,24 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 2
+const schemaVersion = 5
 const microsPerSecond = int64(time.Second / time.Microsecond)
 
-type Store struct{ db *sql.DB }
-
-func Open(path string) (*Store, error) {
+func openDatabase(path string) (*sql.DB, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	for _, q := range []string{"PRAGMA foreign_keys = ON", "PRAGMA journal_mode = WAL", "PRAGMA busy_timeout = 5000"} {
+	for _, q := range []string{"PRAGMA foreign_keys = ON", "PRAGMA journal_mode = WAL", "PRAGMA busy_timeout = 2000", "PRAGMA wal_autocheckpoint = 256", "PRAGMA journal_size_limit = 16777216"} {
 		if _, err = db.Exec(q); err != nil {
 			db.Close()
 			return nil, fmt.Errorf("sqlite initialization %q: %w", q, err)
 		}
 	}
-	s := &Store{db: db}
-	if err = s.migrate(context.Background()); err != nil {
-		db.Close()
-		return nil, err
-	}
-	return s, nil
+	return db, nil
 }
-func (s *Store) Close() error { return s.db.Close() }
-func (s *Store) DB() *sql.DB  { return s.db }
+func (s *Store) DB() *sql.DB { return s.db }
 
 func (s *Store) migrate(ctx context.Context) error {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -77,6 +69,34 @@ func (s *Store) migrate(ctx context.Context) error {
 			return err
 		}
 	}
+	if v < 3 {
+		for _, q := range schemaV3 {
+			if _, err = tx.ExecContext(ctx, q); err != nil {
+				return fmt.Errorf("migrate schema v3: %w", err)
+			}
+		}
+		if _, err = tx.ExecContext(ctx, "PRAGMA user_version = 3"); err != nil {
+			return err
+		}
+	}
+	if v < 4 {
+		for _, q := range schemaV4 {
+			if _, err = tx.ExecContext(ctx, q); err != nil {
+				return fmt.Errorf("migrate schema v4: %w", err)
+			}
+		}
+		if _, err = tx.ExecContext(ctx, "PRAGMA user_version = 4"); err != nil {
+			return err
+		}
+	}
+	if v < 5 {
+		if _, err = tx.ExecContext(ctx, `ALTER TABLE accounts ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0 CHECK(is_admin IN (0,1))`); err != nil {
+			return fmt.Errorf("migrate schema v5: %w", err)
+		}
+		if _, err = tx.ExecContext(ctx, "PRAGMA user_version = 5"); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 
@@ -92,7 +112,7 @@ var schemaV1 = []string{
 }
 
 func dbtime(t time.Time) int64   { return t.UTC().UnixMicro() }
-func scantime(v int64) time.Time { return time.Unix(0, v*int64(time.Microsecond)).UTC() }
+func scantime(v int64) time.Time { return time.UnixMicro(v).UTC() }
 func nullableTime(t *time.Time) any {
 	if t == nil {
 		return nil
@@ -101,6 +121,7 @@ func nullableTime(t *time.Time) any {
 }
 
 type Client struct {
+	HasActiveIdentity                                                                                               bool
 	Fingerprint, Note, Username, Email, ComputerName, LastIP, LastClientID, LastReportedName, LastRole, LastVersion string
 	FirstSeenAt, LastSeenAt                                                                                         time.Time
 }
@@ -139,14 +160,14 @@ func (s *Store) UpdateClientNote(ctx context.Context, fp, note string) error {
 func (s *Store) GetClient(ctx context.Context, fp string) (Client, error) {
 	var c Client
 	var f, l int64
-	err := s.db.QueryRowContext(ctx, `SELECT fingerprint,note,username,email,computer_name,first_seen_at,last_seen_at,last_ip,last_client_id,last_reported_name,last_role,last_version FROM clients WHERE fingerprint=?`, fp).Scan(&c.Fingerprint, &c.Note, &c.Username, &c.Email, &c.ComputerName, &f, &l, &c.LastIP, &c.LastClientID, &c.LastReportedName, &c.LastRole, &c.LastVersion)
+	err := s.db.QueryRowContext(ctx, `SELECT fingerprint,note,username,email,computer_name,first_seen_at,last_seen_at,last_ip,last_client_id,last_reported_name,last_role,last_version,EXISTS(SELECT 1 FROM identity_bindings WHERE identity_bindings.fingerprint=clients.fingerprint AND revoked=0) FROM clients WHERE fingerprint=?`, fp).Scan(&c.Fingerprint, &c.Note, &c.Username, &c.Email, &c.ComputerName, &f, &l, &c.LastIP, &c.LastClientID, &c.LastReportedName, &c.LastRole, &c.LastVersion, &c.HasActiveIdentity)
 	c.FirstSeenAt = scantime(f)
 	c.LastSeenAt = scantime(l)
 	return c, err
 }
 func (s *Store) ListClients(ctx context.Context, limit int, afterFingerprint string) ([]Client, error) {
 	limit = normalizeLimit(limit)
-	rows, err := s.db.QueryContext(ctx, `SELECT fingerprint,note,username,email,computer_name,first_seen_at,last_seen_at,last_ip,last_client_id,last_reported_name,last_role,last_version FROM clients WHERE fingerprint>? ORDER BY fingerprint LIMIT ?`, afterFingerprint, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT fingerprint,note,username,email,computer_name,first_seen_at,last_seen_at,last_ip,last_client_id,last_reported_name,last_role,last_version,EXISTS(SELECT 1 FROM identity_bindings WHERE identity_bindings.fingerprint=clients.fingerprint AND revoked=0) FROM clients WHERE fingerprint>? ORDER BY fingerprint LIMIT ?`, afterFingerprint, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +176,7 @@ func (s *Store) ListClients(ctx context.Context, limit int, afterFingerprint str
 	for rows.Next() {
 		var c Client
 		var f, l int64
-		if err = rows.Scan(&c.Fingerprint, &c.Note, &c.Username, &c.Email, &c.ComputerName, &f, &l, &c.LastIP, &c.LastClientID, &c.LastReportedName, &c.LastRole, &c.LastVersion); err != nil {
+		if err = rows.Scan(&c.Fingerprint, &c.Note, &c.Username, &c.Email, &c.ComputerName, &f, &l, &c.LastIP, &c.LastClientID, &c.LastReportedName, &c.LastRole, &c.LastVersion, &c.HasActiveIdentity); err != nil {
 			return nil, err
 		}
 		c.FirstSeenAt = scantime(f)
@@ -247,7 +268,17 @@ func insertAdmin(ctx context.Context, e execer, a AdminAction) error {
 	return err
 }
 func (s *Store) withTx(ctx context.Context, fn func(*sql.Tx) error) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	if s.commitUncertain.Load() {
+		return ErrCommitOutcomeUnknown
+	}
+	// Keep this physical connection until COMMIT error cleanup has finished:
+	// database/sql marks Tx done even when SQLite leaves a transaction active.
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -255,7 +286,23 @@ func (s *Store) withTx(ctx context.Context, fn func(*sql.Tx) error) error {
 	if err = fn(tx); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err = tx.Commit(); err == nil {
+		return nil
+	}
+	// database/sql checks the transaction context before calling the driver;
+	// modernc's Commit itself uses Background and never returns context errors.
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || (errors.Is(err, sql.ErrTxDone) && ctx.Err() != nil) {
+		return err
+	}
+	// Do not infer rollback or a durable outcome from a COMMIT error. Stop all
+	// future admissions and discard the pool; restart reloads authoritative state.
+	s.commitUncertain.Store(true)
+	cleanup, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	_, _ = conn.ExecContext(cleanup, "ROLLBACK")
+	cancel()
+	_ = conn.Close()
+	_ = s.db.Close()
+	return errors.Join(ErrCommitOutcomeUnknown, err)
 }
 
 type ConnectionAudit struct {
@@ -267,6 +314,9 @@ type ConnectionAudit struct {
 }
 
 func (s *Store) StartConnection(ctx context.Context, a ConnectionAudit) (int64, error) {
+	if err := s.CheckAdmission(ctx); err != nil {
+		return 0, err
+	}
 	if a.AuthenticatedAt.IsZero() {
 		a.AuthenticatedAt = time.Now()
 	}
@@ -304,6 +354,9 @@ type AccessAudit struct {
 }
 
 func (s *Store) StartAccess(ctx context.Context, a AccessAudit) (int64, error) {
+	if err := s.CheckAdmission(ctx); err != nil {
+		return 0, err
+	}
 	if a.StartedAt.IsZero() {
 		a.StartedAt = time.Now()
 	}
@@ -558,8 +611,8 @@ func (s *Store) TodayRejected(ctx context.Context, now time.Time) (int64, time.T
 	startLocal := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, time.Local)
 	start := startLocal.UTC()
 	var n int64
-	err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM connection_audit WHERE authenticated_at>=? AND result IN ('rejected','blocked')`, dbtime(start)).Scan(&n)
-	return n, start, err
+	err := s.db.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM connection_audit WHERE authenticated_at>=? AND result IN ('rejected','blocked')) + (SELECT coalesce(sum(count),0) FROM rejection_counts WHERE bucket_at>=?)`, dbtime(start), dbtime(start)).Scan(&n)
+	return n + s.PendingRejections(), start, err
 }
 
 var ErrInvalidCursor = errors.New("invalid cursor")

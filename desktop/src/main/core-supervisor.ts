@@ -12,6 +12,7 @@ import type {
   EndpointFile,
   KeyGenerationRequestDTO,
   KeyGenerationResultDTO,
+  LoginRequestDTO,
   SettingsDTO,
   SnapshotDTO,
   TunnelConfigDTO,
@@ -66,6 +67,12 @@ export class CoreSupervisor {
   async connect(): Promise<SnapshotDTO> {
     const client = await this.getClient()
     await client.connect()
+    return this.refreshSnapshot()
+  }
+
+  async login(request: LoginRequestDTO): Promise<SnapshotDTO> {
+    const client = await this.getClient()
+    await client.login(request)
     return this.refreshSnapshot()
   }
 

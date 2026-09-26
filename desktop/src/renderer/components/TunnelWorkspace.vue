@@ -6,6 +6,7 @@
       :busy="busy"
       :update-available="updateAvailable"
       @connect="connect"
+      @login="openLogin"
       @disconnect="disconnect"
       @settings="settingsOpen = true"
       @lock="emit('lock')"
@@ -27,6 +28,11 @@
         <button v-if="activeTab !== 'logs'" class="button button-primary" type="button" :disabled="busy" @click="openNewTunnel">
           {{ activeTab === 'import' ? '+ 从在线列表添加' : '+ 添加隧道' }}
         </button>
+      </section>
+
+      <section v-if="connection.state !== 'connected'" class="account-notice">
+        <div><strong>使用账号连接</strong><p>向管理员获取账号和密码，登录后自动登记此设备。</p></div>
+        <button class="button button-primary" type="button" :disabled="busy || status.phase !== 'running'" @click="openLogin">账号登录</button>
       </section>
 
       <nav class="tabs" aria-label="隧道类型">
@@ -89,7 +95,9 @@
       @save="saveSettings"
       @generate="openKeyGenerator"
       @check-update="checkUpdateFromSettings"
+      @login="settingsOpen = false; openLogin()"
     />
+    <LoginDialog :open="loginOpen" :snapshot="snapshot" :busy="busy" :error="error" @close="loginOpen = false" @submit="submitLogin" />
     <UpdateDialog
       :open="updateDialogOpen"
       :state="updateState"
@@ -109,7 +117,7 @@
     <ConfirmationDialog
       :confirmation="displayedConfirmation"
       :title="confirmationTitle"
-      :busy="busy"
+      :busy="pendingConfirmation ? confirmationBusy : busy"
       @answer="answerConfirmation"
     />
   </div>
@@ -122,6 +130,7 @@ import type {
   ConfirmationDTO,
   KeyGenerationRequestDTO,
   KeyGenerationResultDTO,
+  LoginRequestDTO,
   SettingsDTO,
   TunnelConfigDTO,
   TunnelDTO,
@@ -135,6 +144,7 @@ import ConnectionHeader from './ConnectionHeader.vue'
 import ImportPickerDialog from './ImportPickerDialog.vue'
 import KeyGenerationDialog from './KeyGenerationDialog.vue'
 import LogPanel from './LogPanel.vue'
+import LoginDialog from './LoginDialog.vue'
 import SettingsDialog from './SettingsDialog.vue'
 import TunnelEditorDialog from './TunnelEditorDialog.vue'
 import TunnelList from './TunnelList.vue'
@@ -149,6 +159,7 @@ const {
   status,
   logs,
   busy,
+  confirmationBusy,
   error,
   updateState,
   connection,
@@ -156,6 +167,7 @@ const {
   pendingConfirmation,
   refresh,
   connect,
+  login,
   disconnect,
   addTunnel,
   addTunnels,
@@ -178,6 +190,7 @@ const editorKind = shallowRef<TunnelKind>('export')
 const editTarget = shallowRef<TunnelDTO>()
 const deleteTarget = shallowRef<TunnelDTO>()
 const settingsOpen = shallowRef(false)
+const loginOpen = shallowRef(false)
 const keyDialogOpen = shallowRef(false)
 const keyGenerationPath = shallowRef('')
 const keyGenerationResult = shallowRef<KeyGenerationResultDTO>()
@@ -256,6 +269,17 @@ async function saveSettings(value: SettingsDTO): Promise<void> {
   if (!error.value) settingsOpen.value = false
 }
 
+function openLogin(): void {
+  clearError()
+  loginOpen.value = true
+}
+async function submitLogin(request: LoginRequestDTO, settings: SettingsDTO): Promise<void> {
+  try {
+    await login(request, settings)
+    if (!error.value) loginOpen.value = false
+  } finally { request.password = '' }
+}
+
 async function checkUpdateFromSettings(): Promise<void> {
   const state = await checkForUpdates()
   if (state.phase === 'available' || state.phase === 'downloading' || state.phase === 'downloaded') {
@@ -329,6 +353,7 @@ async function answerConfirmation(accept: boolean): Promise<void> {
 .eyebrow { margin: 0 0 7px; color: var(--accent-light); font-size: 10px; font-weight: 800; letter-spacing: .15em; }
 .workspace-title { margin: 0; font-size: 24px; letter-spacing: -.03em; }
 .workspace-copy { margin: 7px 0 0; color: var(--muted); font-size: 12px; }
+.account-notice { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 16px; margin-top: 22px; padding: 15px 18px; border: 1px solid var(--line-strong); border-radius: 12px; background: #182441; font-size: 12px; }.account-notice p { margin: 5px 0 0; color: var(--muted); }
 .tabs { display: flex; flex: 0 0 auto; gap: 5px; margin: 28px 0 15px; padding: 4px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,255,255,.025); }
 .tab { padding: 8px 13px; border: 0; border-radius: 8px; color: var(--muted); font: inherit; font-size: 12px; background: transparent; cursor: pointer; }
 .tab:hover { color: var(--text); }

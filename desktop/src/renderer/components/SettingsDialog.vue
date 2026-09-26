@@ -17,14 +17,19 @@
           <span class="field-label">服务器地址</span>
           <input v-model.trim="form.server_addr" class="input" placeholder="example.com:22" required />
         </label>
-        <label class="field">
-          <span class="field-label">私钥路径</span>
-          <span class="key-path-row">
-            <input v-model.trim="form.key_path" class="input" placeholder="D:\keys\tunnel_key" required />
-            <button class="button button-secondary" type="button" :disabled="busy" @click="emit('generate', form.key_path)">生成</button>
-          </span>
-        </label>
+        <details class="advanced-key">
+          <summary>高级：原有设备密钥</summary>
+          <p class="settings-hint">账号登录自动管理设备密钥。已有密钥路径会保留；仅在管理存量设备时手工调整。</p>
+          <label class="field">
+            <span class="field-label">私钥路径</span>
+            <span class="key-path-row">
+              <input v-model.trim="form.key_path" class="input" placeholder="未设置时由核心自动选择" />
+              <button class="button button-secondary" type="button" :disabled="busy" @click="emit('generate', form.key_path)">生成</button>
+            </span>
+          </label>
+        </details>
       </div>
+      <button class="button button-secondary account-action" type="button" :disabled="busy" @click="emit('login')">使用管理员账号登录</button>
       <p class="settings-hint">设置保存在核心配置中；若当前已连接，保存后核心会自动重建连接。</p>
       <section class="update-section" aria-labelledby="version-title">
         <div>
@@ -62,6 +67,7 @@ const emit = defineEmits<{
   save: [settings: SettingsDTO]
   generate: [keyPath: string]
   checkUpdate: []
+  login: []
 }>()
 const form = reactive<SettingsDTO>({ name: '', server_addr: '', key_path: '' })
 const updateBusy = computed(() => ['checking', 'downloading', 'downloaded', 'installing'].includes(props.updateState.phase))
@@ -110,6 +116,7 @@ function submit(): void {
 .field-label { color: #c3cad8; font-size: 12px; }
 .key-path-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
 .settings-hint { margin: 16px 0 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.advanced-key { font-size: 12px; color: var(--muted); }.advanced-key summary { cursor: pointer; }.advanced-key .field { margin-top: 12px; }.account-action { margin-top: 18px; }
 .update-section { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); }
 .section-title { margin: 0; color: #c3cad8; font-size: 12px; }
 .version-copy { margin: 6px 0 0; color: var(--muted); font: 11px Consolas, monospace; }

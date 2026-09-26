@@ -95,6 +95,12 @@ export interface SettingsDTO {
   key_path: string
 }
 
+// Credentials are transient request data and are never part of a snapshot.
+export interface LoginRequestDTO {
+  username: string
+  password: string
+}
+
 export interface KeyGenerationRequestDTO {
   key_path: string
   username: string

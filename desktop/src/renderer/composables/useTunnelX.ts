@@ -4,6 +4,7 @@ import type {
   CoreStatus,
   KeyGenerationRequestDTO,
   KeyGenerationResultDTO,
+  LoginRequestDTO,
   SettingsDTO,
   SnapshotDTO,
   TunnelConfigDTO,
@@ -18,6 +19,7 @@ export function useTunnelX() {
   const status = shallowRef<CoreStatus>({ phase: 'starting' })
   const logs = shallowRef<NonNullable<SnapshotDTO['logs']>>([])
   const busy = shallowRef(false)
+  const confirmationBusy = shallowRef(false)
   const error = shallowRef('')
   const updateState = shallowRef<UpdateState>({
     phase: 'idle',
@@ -71,6 +73,15 @@ export function useTunnelX() {
     await invoke(() => bridge().connect())
   }
 
+  async function login(request: LoginRequestDTO, settings: SettingsDTO): Promise<void> {
+    await execute(async () => {
+      try {
+        applySnapshot(await bridge().updateSettings(settings))
+        applySnapshot(await bridge().login(request))
+      } finally { request.password = '' }
+    })
+  }
+
   async function disconnect(): Promise<void> {
     await invoke(() => bridge().disconnect())
   }
@@ -112,14 +123,17 @@ export function useTunnelX() {
   }
 
   async function confirm(id: number, accept: boolean): Promise<void> {
-    await invoke(async () => {
+    if (confirmationBusy.value) return
+    confirmationBusy.value = true
+    try {
       const next = await bridge().confirm(id, accept)
       applySnapshot({
         ...next,
         pending_confirmations: (next.pending_confirmations ?? []).filter(item => item.id !== id),
       })
-      return next
-    }, false)
+    } catch (reason) {
+      error.value = reason instanceof Error ? reason.message : String(reason)
+    } finally { confirmationBusy.value = false }
   }
 
   async function checkForUpdates(): Promise<UpdateState> {
@@ -185,6 +199,7 @@ export function useTunnelX() {
     status: shallowReadonly(status),
     logs: shallowReadonly(logs),
     busy: shallowReadonly(busy),
+    confirmationBusy: shallowReadonly(confirmationBusy),
     error: shallowReadonly(error),
     updateState: shallowReadonly(updateState),
     connection,
@@ -192,6 +207,7 @@ export function useTunnelX() {
     pendingConfirmation,
     refresh,
     connect,
+    login,
     disconnect,
     addTunnel,
     addTunnels,

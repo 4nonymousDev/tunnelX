@@ -2,6 +2,7 @@ package proto
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,7 +13,8 @@ import (
 // 注册表即使数百条也远小于此。
 // maxLineBytes limits individual messages so malformed input cannot exhaust memory.
 // Even a registry containing hundreds of entries is far smaller than this.
-const maxLineBytes = 4 << 20 // 4MB
+const MaxFrameBytes = 4 << 20
+const maxLineBytes = MaxFrameBytes
 
 // Conn 在一条 SSH channel 上收发 JSON Lines 消息。
 // 写入加锁：多个 goroutine 可能同时上报（如隧道状态变化与心跳），而 json.Encoder
@@ -22,21 +24,19 @@ const maxLineBytes = 4 << 20 // 4MB
 // tunnel state changes and heartbeats), while json.Encoder writes are not atomic;
 // concurrent writes could interleave two messages and produce an invalid line.
 type Conn struct {
-	rw  io.ReadWriter
-	enc *json.Encoder
-	sc  *bufio.Scanner
-	mu  sync.Mutex
+	rw io.ReadWriter
+	sc *bufio.Scanner
+	mu sync.Mutex
 }
 
 // NewConn 包装一条已建立的 SSH channel。
 // NewConn wraps an established SSH channel.
 func NewConn(rw io.ReadWriter) *Conn {
 	sc := bufio.NewScanner(rw)
-	sc.Buffer(make([]byte, 0, 64*1024), maxLineBytes)
+	sc.Buffer(make([]byte, 0, 64*1024), MaxFrameBytes+1)
 	return &Conn{
-		rw:  rw,
-		enc: json.NewEncoder(rw),
-		sc:  sc,
+		rw: rw,
+		sc: sc,
 	}
 }
 
@@ -45,9 +45,17 @@ func NewConn(rw io.ReadWriter) *Conn {
 // Send writes one message. encoding/json appends \n and escapes newlines within the
 // message body, so JSON Lines framing remains intact.
 func (c *Conn) Send(msg any) error {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("编码控制消息: %w", err)
+	}
+	if len(data)+1 > MaxFrameBytes {
+		return fmt.Errorf("控制消息超过 %d 字节", MaxFrameBytes)
+	}
+	data = append(data, '\n')
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if err := c.enc.Encode(msg); err != nil {
+	if _, err := io.Copy(c.rw, bytes.NewReader(data)); err != nil {
 		return fmt.Errorf("发送控制消息: %w", err)
 	}
 	return nil
@@ -68,11 +76,44 @@ func (c *Conn) Recv() (Envelope, []byte, error) {
 		return Envelope{}, nil, io.EOF
 	}
 	line := c.sc.Bytes()
+	if len(line)+1 > MaxFrameBytes {
+		return Envelope{}, nil, fmt.Errorf("控制消息超过 %d 字节", MaxFrameBytes)
+	}
 	var env Envelope
 	if err := json.Unmarshal(line, &env); err != nil {
 		return Envelope{}, nil, fmt.Errorf("解析控制消息: %w", err)
 	}
 	return env, line, nil
+}
+
+func EncodeOpen(target Target) ([]byte, error) {
+	if !target.Valid() {
+		return nil, fmt.Errorf("目标身份或发布代际缺失")
+	}
+	b, err := json.Marshal(OpenRequest{V: Version, Target: target})
+	if err == nil && len(b) > MaxOpenBytes {
+		return nil, fmt.Errorf("目标请求过大")
+	}
+	return b, err
+}
+
+func DecodeOpen(raw []byte) (Target, error) {
+	var req OpenRequest
+	if len(raw) == 0 || len(raw) > MaxOpenBytes {
+		return Target{}, fmt.Errorf("目标请求大小无效")
+	}
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.DisallowUnknownFields()
+	if err := d.Decode(&req); err != nil {
+		return Target{}, err
+	}
+	if d.Decode(new(any)) != io.EOF {
+		return Target{}, fmt.Errorf("目标请求包含多条消息")
+	}
+	if req.V != Version || !req.Target.Valid() {
+		return Target{}, fmt.Errorf("目标协议或身份无效")
+	}
+	return req.Target, nil
 }
 
 // Decode 将 Recv 返回的原始字节解码为具体消息结构。

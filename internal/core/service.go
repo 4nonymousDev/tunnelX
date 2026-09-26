@@ -3,16 +3,19 @@
 package core
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"sync"
 	"time"
 
 	"tunnelx/internal/config"
+	"tunnelx/internal/enrollment"
 	"tunnelx/internal/keygen"
 	"tunnelx/internal/logbuf"
 	"tunnelx/internal/manager"
 	"tunnelx/internal/proto"
+	"tunnelx/internal/sshconn"
 	"tunnelx/internal/tunnel"
 )
 
@@ -92,6 +95,9 @@ type Service struct {
 	pending       map[uint64]*Confirmation
 	nextConfirmID uint64
 	unsubLog      func()
+	loginCancel   context.CancelFunc
+	loginContext  context.Context
+	loginSnapshot *Snapshot
 }
 
 func New(cfg *config.Config, opts Options) (*Service, error) {
@@ -124,6 +130,12 @@ func (s *Service) Start() {
 	s.mgr.Start()
 }
 func (s *Service) Stop() {
+	s.mu.RLock()
+	loginCancel := s.loginCancel
+	s.mu.RUnlock()
+	if loginCancel != nil {
+		loginCancel()
+	}
 	s.cancelConfirmations()
 	s.ops.Lock()
 	defer s.ops.Unlock()
@@ -155,8 +167,32 @@ func (s *Service) Persist() error {
 }
 
 func (s *Service) Snapshot(minLogLevel logbuf.Level) Snapshot {
-	s.ops.Lock()
+	for {
+		s.mu.RLock()
+		if s.loginSnapshot != nil {
+			snap := *s.loginSnapshot
+			snap.Config = cloneConfig(&snap.Config)
+			snap.Tunnels = append([]TunnelSnapshot(nil), snap.Tunnels...)
+			snap.Registry = append([]proto.RegistryEntry(nil), snap.Registry...)
+			snap.Pending = s.pendingLocked()
+			s.mu.RUnlock()
+			snap.Connection = s.mgr.ConnStatus()
+			snap.Logs = s.log.Snapshot(minLogLevel)
+			return snap
+		}
+		s.mu.RUnlock()
+		if s.ops.TryLock() {
+			break
+		}
+		// Do not enter an uninterruptible lock wait just before a login starts;
+		// its confirmation must remain visible through the snapshot endpoint.
+		time.Sleep(time.Millisecond)
+	}
 	defer s.ops.Unlock()
+	return s.snapshotLocked(minLogLevel)
+}
+
+func (s *Service) snapshotLocked(minLogLevel logbuf.Level) Snapshot {
 	snap := Snapshot{
 		Version:    s.version,
 		Config:     cloneConfig(s.cfg),
@@ -170,13 +206,42 @@ func (s *Service) Snapshot(minLogLevel logbuf.Level) Snapshot {
 		})
 	}
 	s.mu.RLock()
+	snap.Pending = s.pendingLocked()
+	s.mu.RUnlock()
+	return snap
+}
+
+func (s *Service) pendingLocked() []Confirmation {
+	var out []Confirmation
 	for _, pending := range s.pending {
 		item := *pending
 		item.response = nil
-		snap.Pending = append(snap.Pending, item)
+		out = append(out, item)
 	}
-	s.mu.RUnlock()
-	return snap
+	return out
+}
+
+// Login keeps interactive confirmations and snapshots available while serializing
+// credential enrollment against settings changes and connection lifecycle actions.
+func (s *Service) Login(ctx context.Context, username, password string) error {
+	if !enrollment.ValidUsername(enrollment.NormalizeUsername(username)) || !enrollment.ValidLoginPassword(password) {
+		return errors.New("请输入有效账号和密码")
+	}
+	s.cancelConfirmations()
+	s.ops.Lock()
+	defer s.ops.Unlock()
+	ctx, cancel := context.WithTimeout(ctx, sshconn.EnrollmentTimeout)
+	defer cancel()
+	snapshot := s.snapshotLocked(logbuf.Info)
+	s.mu.Lock()
+	s.loginContext, s.loginCancel, s.loginSnapshot = ctx, cancel, &snapshot
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.loginContext, s.loginCancel, s.loginSnapshot = nil, nil, nil
+		s.mu.Unlock()
+	}()
+	return s.mgr.Login(ctx, username, password)
 }
 
 func cloneConfig(cfg *config.Config) config.Config {
@@ -373,7 +438,20 @@ func (s *Service) confirmHostKey(host, fingerprint string) bool {
 
 func (s *Service) fixKeyPermissions(path string, readers []string) bool {
 	if s.confirm != nil {
-		return s.confirm.FixKeyPermissions(path, readers)
+		s.mu.RLock()
+		ctx := s.loginContext
+		s.mu.RUnlock()
+		if ctx == nil {
+			return s.confirm.FixKeyPermissions(path, readers)
+		}
+		answer := make(chan bool, 1)
+		go func() { answer <- s.confirm.FixKeyPermissions(path, readers) }()
+		select {
+		case accept := <-answer:
+			return accept
+		case <-ctx.Done():
+			return false
+		}
 	}
 	return s.awaitConfirmation(Confirmation{Kind: "key_permissions", Path: path,
 		Readers: append([]string(nil), readers...), Message: "私钥权限过宽，是否自动修复"})
@@ -389,6 +467,10 @@ func (s *Service) confirmOverwrite(path string) bool {
 
 func (s *Service) awaitConfirmation(item Confirmation) bool {
 	s.mu.Lock()
+	ctx := s.loginContext
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	s.nextConfirmID++
 	item.ID = s.nextConfirmID
 	item.response = make(chan bool, 1)
@@ -397,7 +479,11 @@ func (s *Service) awaitConfirmation(item Confirmation) bool {
 	public.response = nil
 	s.publishLocked(Event{Kind: EventConfirmation, Confirmation: &public})
 	s.mu.Unlock()
-	answer := <-item.response
+	var answer bool
+	select {
+	case answer = <-item.response:
+	case <-ctx.Done():
+	}
 	s.mu.Lock()
 	delete(s.pending, item.ID)
 	s.mu.Unlock()

@@ -5,6 +5,31 @@ The Electron main process communicates with the `tunnelx-cli` core only through
 an authenticated local API. The renderer has no Node.js capabilities and
 cannot read the control token.
 
+## Account login
+
+An administrator first creates an account under **Account management → Create
+account (账号管理 → 创建账号)** in the server management page and provides the
+server address and credentials. In the desktop header, select **Account login
+(账号登录)** and enter the server address, device name, username and password.
+Verify and confirm the server fingerprint on first connection; a changed host
+key also requires separate handling.
+
+Login automatically enrolls the device without a `.pub` upload or manual device
+ID. Existing key paths, device IDs and tunnels are preserved; a missing key is
+generated automatically. The password is used only for that login and cleared
+from the form after submission. It is never written to configuration, browser
+storage or logs. Ordinary restarts can reconnect with the enrolled device key.
+Disabling the account or resetting its password disconnects all of its sessions
+and requires password login next time; re-enabling it does not automatically
+restore those sessions.
+
+The account password is separate from the local interface-lock password.
+The main process rejects login while locked, so unlock the interface first.
+Key paths and manual key-generation tools remain under advanced settings.
+Existing authorized v2 devices can retain their manual authorization rules;
+account-enrolled devices cannot fall back to legacy file authorization. Client
+configuration remains schema 2. See the [account login guide](../ACCOUNT_LOGIN_GUIDE.md).
+
 ## Architecture
 
 - `src/main`: window, tray, single-instance handling, core-process discovery
@@ -51,6 +76,7 @@ review the report before posting it to a public issue.
 ```powershell
 npm run typecheck
 npm run build
+npm run test:security
 npm run package
 ```
 
@@ -70,7 +96,7 @@ The GUI and CLI have independent [SemVer](https://semver.org/) versions:
 - The CLI version is the root `CLI_VERSION`, injected into `tunnelx-cli.exe` by the release build.
 - GUI-only changes bump only the GUI version. CLI changes bump the CLI version and at least the GUI patch version because the desktop installer carries the CLI update.
 
-`.github/workflows/release-desktop.yml` tests, builds, and publishes the unsigned NSIS installer and portable ZIP on a clean Windows runner. Update the versions before pushing a tag:
+`.github/workflows/release-desktop.yml` tests, builds, and publishes a signed NSIS installer and portable ZIP on a clean Windows runner. Update the versions before pushing a tag:
 
 ```powershell
 npm --prefix desktop version 0.1.1 --no-git-tag-version
@@ -80,7 +106,11 @@ git tag v0.1.1
 git push origin HEAD --tags
 ```
 
-The workflow uses GitHub's built-in `GITHUB_TOKEN`; no signing secret is currently required. Confirm that Settings → Actions → General → Workflow permissions permits writing Releases. Unsigned installers can trigger SmartScreen or Unknown Publisher warnings.
+Before publishing, configure the `CSC_LINK` certificate and `CSC_KEY_PASSWORD` repository secrets, plus the `TUNNELX_PUBLISHER_NAME` repository variable matching the certificate Subject exactly. The workflow runs `npm run package:signed` and refuses publishing without these inputs. `GITHUB_TOKEN` is used to write Releases. Without a certificate, `npm run package -- --publish never` can create a local unsigned test package; automatic updates are disabled in those builds. Replace the program manually while preserving userData. Existing unsigned releases should also migrate to the first verified signed build through manual installation.
+
+Signed builds pin the publisher in their update configuration. The main process registers an electron-updater verifier requiring Valid Windows Authenticode status and an exact match of the complete certificate Subject. Unavailable PowerShell, parsing failures and invalid signatures reject the update. No certificate is included in this repository. Configuration validation does not constitute real signature validation: the first signed release still needs an actual certificate and verification of its output.
+
+The interface lock gates protected IPC in the main process and accepts calls only from the main frame of the main window. A locked interface cannot reset its password to bypass unlocking; corrupt lock files fail closed. This is interface access control within an OS account, not OS account isolation. Key generation allows empty username/email and never automatically collects the hostname. Any explicitly entered identity metadata is plaintext in the public-key comment.
 
 The installed edition supports in-app updates. To remain installation-free,
 portable ZIP users should download each new ZIP manually, exit the old version,

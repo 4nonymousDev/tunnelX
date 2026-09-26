@@ -42,27 +42,27 @@ type Metadata struct {
 }
 
 func NewMetadata(username, email string) (Metadata, error) {
-	host, err := os.Hostname()
-	if err != nil || strings.TrimSpace(host) == "" {
-		host = "unknown-host"
-	}
-	m := Metadata{Username: strings.TrimSpace(username), Email: strings.TrimSpace(email), ComputerName: strings.TrimSpace(host)}
+	// Identity metadata is optional and supplied explicitly; never collect the
+	// operating-system hostname as a side effect of generating a credential.
+	m := Metadata{Username: strings.TrimSpace(username), Email: strings.TrimSpace(email)}
 	return m, m.Validate()
 }
 
 func (m Metadata) Validate() error {
-	if m.Username == "" || len([]rune(m.Username)) > 128 {
-		return fmt.Errorf("用户名不能为空且不能超过 128 个字符")
+	if len([]rune(m.Username)) > 128 {
+		return fmt.Errorf("用户名不能超过 128 个字符")
 	}
-	if m.Email == "" || len(m.Email) > 254 {
-		return fmt.Errorf("邮箱不能为空且不能超过 254 个字符")
+	if len(m.Email) > 254 {
+		return fmt.Errorf("邮箱不能超过 254 个字符")
 	}
-	addr, err := mail.ParseAddress(m.Email)
-	if err != nil || addr.Address != m.Email {
-		return fmt.Errorf("邮箱格式无效")
+	if m.Email != "" {
+		addr, err := mail.ParseAddress(m.Email)
+		if err != nil || addr.Address != m.Email {
+			return fmt.Errorf("邮箱格式无效")
+		}
 	}
-	if strings.TrimSpace(m.ComputerName) == "" || len([]rune(m.ComputerName)) > 255 {
-		return fmt.Errorf("计算机名不能为空且不能超过 255 个字符")
+	if len([]rune(m.ComputerName)) > 255 {
+		return fmt.Errorf("计算机名不能超过 255 个字符")
 	}
 	return nil
 }
@@ -110,10 +110,8 @@ type Result struct {
 	// Fingerprint is the SHA256 fingerprint in ssh-keygen -lf format for server-side verification.
 	Fingerprint string
 
-	// PermErr 记录收紧文件权限时的失败。密钥此时已生成成功，
-	// 不作为错误返回——调用方记日志即可，权限问题由连接前的检查再次提示。
-	// PermErr records a permission-tightening failure after successful generation;
-	// callers log it and the preconnection check warns again later.
+	// PermErr is retained for source compatibility. Permission errors now fail
+	// creation before any private-key bytes are written, so success leaves it nil.
 	PermErr error
 }
 
@@ -138,6 +136,9 @@ func Generate(dir, name, comment string) (Result, error) {
 // GenerateWithMetadata writes username, email, and computer name as plaintext
 // structured metadata in the .pub comment.
 func GenerateWithMetadata(dir, name string, metadata Metadata) (Result, error) {
+	if metadata == (Metadata{}) {
+		return generate(dir, name, "")
+	}
 	comment, err := metadata.Comment()
 	if err != nil {
 		return Result{}, err
@@ -195,7 +196,7 @@ func generate(dir, name, comment string) (Result, error) {
 	// 私钥以 0600 创建，且用 O_EXCL——从 Stat 到写入之间文件可能被创建，
 	// 用 O_EXCL 让"不覆盖"这条保证落在系统调用上，而不只靠先前的检查。
 	// Create the private key as 0600 with O_EXCL so the no-overwrite guarantee is enforced atomically.
-	f, err := os.OpenFile(keyPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	f, err := keyperm.Create(keyPath)
 	if err != nil {
 		return Result{}, fmt.Errorf("创建私钥文件: %w", err)
 	}
@@ -209,7 +210,18 @@ func generate(dir, name, comment string) (Result, error) {
 		return Result{}, fmt.Errorf("写入私钥: %w", err)
 	}
 
-	if err := os.WriteFile(pubPath, []byte(pubLine), 0o644); err != nil {
+	pubFile, err := keyperm.Create(pubPath)
+	if err == nil {
+		_, err = pubFile.WriteString(pubLine)
+		closeErr := pubFile.Close()
+		if err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			os.Remove(pubPath)
+		}
+	}
+	if err != nil {
 		// 公钥写失败则连私钥一并删除：留下一把没有公钥的私钥，用户既不知道
 		// 该往服务端贴什么，也看不出目录里这个文件是什么。
 		// Remove the private key when writing its public half fails; an orphan is unusable and confusing.
@@ -220,14 +232,11 @@ func generate(dir, name, comment string) (Result, error) {
 	// 新生成的密钥不该一出生就是宽权限。此处直接收紧而不像连接前检查那样
 	// 弹窗询问：文件刚由本程序创建，不存在"用户有意放宽"的可能。
 	// Tighten a newly created key immediately; unlike an existing key, it cannot intentionally be permissive.
-	permErr := keyperm.Fix(keyPath)
-
 	return Result{
 		KeyPath:     keyPath,
 		PubPath:     pubPath,
 		PublicKey:   pubLine,
 		Fingerprint: ssh.FingerprintSHA256(sshPub),
-		PermErr:     permErr,
 	}, nil
 }
 
@@ -250,14 +259,7 @@ func authorizedKeyLine(pub ssh.PublicKey, comment string) string {
 // keyComment builds "name@hostname" like ssh-keygen and replaces whitespace with hyphens.
 func keyComment(name string) string {
 	name = strings.TrimSpace(name)
-	host, err := os.Hostname()
-	if err != nil || host == "" {
-		host = "unknown-host"
-	}
-	if name == "" {
-		name = host
-	}
-	return sanitize(name) + "@" + sanitize(host)
+	return sanitize(name)
 }
 
 func sanitize(s string) string {

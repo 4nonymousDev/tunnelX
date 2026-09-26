@@ -6,9 +6,12 @@
 package control
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"sort"
 	"sync"
 	"time"
 
@@ -25,9 +28,11 @@ import (
 // （供 Export 上报隧道列表）。
 // Client is the client side of the control channel and implements both tunnel.Resolver and tunnel.Publisher.
 type Client struct {
-	ch  ssh.Channel
-	pc  *proto.Conn
-	log *logbuf.Buffer
+	ssh  *ssh.Client
+	self proto.Target
+	ch   ssh.Channel
+	pc   *proto.Conn
+	log  *logbuf.Buffer
 
 	role string
 
@@ -35,7 +40,11 @@ type Client struct {
 	registry []proto.RegistryEntry
 	// published 记录已建立的 Export 隧道，键为稳定隧道 ID。
 	// published tracks established Export tunnels by stable tunnel ID.
-	published map[string]proto.TunnelSpec
+	published        map[string]proto.TunnelSpec
+	exports          map[string]*exportState
+	forwardSlots     chan struct{}
+	publishMu        sync.Mutex
+	onTargetResolved func(string, proto.Target) error
 
 	// respCh 把服务端的应答交给等待中的请求方。
 	// 协议是严格请求-应答的，同一时刻只允许一个在途请求，
@@ -74,16 +83,21 @@ func Dial(client *ssh.Client, cfg *config.Config, role, version string, log *log
 	go ssh.DiscardRequests(reqs)
 
 	c := &Client{
-		ch:        ch,
-		pc:        proto.NewConn(ch),
-		log:       log,
-		role:      role,
-		published: map[string]proto.TunnelSpec{},
-		respCh:    make(chan respond, 1),
-		done:      make(chan struct{}),
+		ssh:          client,
+		ch:           ch,
+		pc:           proto.NewConn(ch),
+		log:          log,
+		role:         role,
+		published:    map[string]proto.TunnelSpec{},
+		exports:      map[string]*exportState{},
+		forwardSlots: make(chan struct{}, 32),
+		respCh:       make(chan respond, 1),
+		done:         make(chan struct{}),
 	}
 
+	forwarded := client.HandleChannelOpen(proto.ForwardChannelType)
 	go c.readLoop()
+	go c.forwardLoop(forwarded)
 
 	if err := c.hello(cfg, version); err != nil {
 		c.Close()
@@ -125,6 +139,7 @@ func (c *Client) fail(cause error) {
 		c.cause = cause
 		c.mu.Unlock()
 		close(c.done)
+		c.ssh.Close()
 		c.ch.Close()
 	})
 }
@@ -132,6 +147,7 @@ func (c *Client) fail(cause error) {
 // hello 完成握手与版本协商。
 // hello performs the handshake and version negotiation.
 func (c *Client) hello(cfg *config.Config, version string) error {
+	var reply proto.HelloOK
 	err := c.request(proto.Hello{
 		V:             proto.Version,
 		Type:          proto.TypeHello,
@@ -139,10 +155,16 @@ func (c *Client) hello(cfg *config.Config, version string) error {
 		ID:            cfg.ID,
 		Name:          cfg.Name,
 		ClientVersion: version,
-	}, proto.TypeHelloOK, nil)
+	}, proto.TypeHelloOK, &reply)
 	if err != nil {
 		return err
 	}
+	if reply.SessionID == "" || reply.Fingerprint == "" {
+		return errors.New("服务端未返回可信会话身份")
+	}
+	c.mu.Lock()
+	c.self = proto.Target{ClientID: cfg.ID, Fingerprint: reply.Fingerprint, SessionID: reply.SessionID}
+	c.mu.Unlock()
 	// 打印完整 id：Importer 的 peer_id 需要填写此值，让用户无需翻 config.json。
 	// Log the full ID because Importer peer_id uses it, sparing users from opening config.json.
 	c.log.Infof("ctrl", "控制通道已建立 — 本机名称=%s 本机id=%s 角色=%s",
@@ -160,8 +182,11 @@ func (c *Client) request(msg any, wantType string, out any) error {
 	// Serialize requests so respCh can match the single in-flight response unambiguously.
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
+	deadline := time.AfterFunc(respTimeout, func() { c.fail(errors.New("控制请求超过总期限")) })
+	defer deadline.Stop()
 
 	if err := c.pc.Send(msg); err != nil {
+		c.fail(err)
 		return err
 	}
 
@@ -173,7 +198,9 @@ func (c *Client) request(msg any, wantType string, out any) error {
 		return errors.New("控制通道已关闭")
 
 	case <-time.After(respTimeout):
-		return fmt.Errorf("等待服务端应答超时（%s）", respTimeout)
+		err := fmt.Errorf("等待服务端应答超时（%s）", respTimeout)
+		c.fail(err)
+		return err
 
 	case r := <-c.respCh:
 		if r.env.Type == proto.TypeError {
@@ -265,23 +292,51 @@ func (c *Client) Registry() []proto.RegistryEntry {
 
 // ---- tunnel.Resolver ----
 
-// ResolveRemotePort 优先按「对端身份 + 隧道 ID」精确查找；旧配置没有
-// peer_tunnel_id 时回退到历史的「对端身份 + 源端口」语义。
-// ResolveRemotePort prefers peer identity plus tunnel ID, falling back to the legacy source-port key.
-func (c *Client) ResolveRemotePort(peerID, peerTunnelID string, srcPort int) (int, bool) {
+// ResolveTarget accepts only administrator-verified identity records. Legacy
+// source-port configuration is resolved only when exactly one publication matches.
+func (c *Client) ResolveTarget(peerID, fingerprint, peerTunnelID string, srcPort int) (proto.Target, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-
+	var matches []proto.RegistryEntry
 	for _, e := range c.registry {
 		if e.ID != peerID {
 			continue
 		}
 		if (peerTunnelID != "" && e.TunnelID == peerTunnelID) ||
 			(peerTunnelID == "" && e.SrcPort == srcPort) {
-			return e.RemotePort, true
+			matches = append(matches, e)
 		}
 	}
-	return 0, false
+	if len(matches) == 0 {
+		return proto.Target{}, &proto.Error{Code: proto.CodePeerOffline, Msg: "目标当前不在线"}
+	}
+	if len(matches) != 1 {
+		return proto.Target{}, &proto.Error{Code: proto.CodeAmbiguousTarget, Msg: "旧源端口匹配多个隧道，请指定隧道ID"}
+	}
+	e := matches[0]
+	if !e.IdentityVerified || !e.Target().Valid() {
+		return proto.Target{}, &proto.Error{Code: proto.CodeIdentityUnverified, Msg: "目标身份尚未由管理员确认"}
+	}
+	if fingerprint != "" && fingerprint != e.Fingerprint {
+		return proto.Target{}, &proto.Error{Code: proto.CodeIdentityMismatch, Msg: "目标公钥指纹与已保存身份不符"}
+	}
+	return e.Target(), nil
+}
+
+func (c *Client) SetOnTargetResolved(fn func(string, proto.Target) error) {
+	c.mu.Lock()
+	c.onTargetResolved = fn
+	c.mu.Unlock()
+}
+
+func (c *Client) BindTarget(id string, target proto.Target) error {
+	c.mu.RLock()
+	fn := c.onTargetResolved
+	c.mu.RUnlock()
+	if fn != nil {
+		return fn(id, target)
+	}
+	return nil
 }
 
 // DescribeRegistry 列出注册表中可选的对端，供解析失败时排查配置。
@@ -301,8 +356,8 @@ func (c *Client) DescribeRegistry() []string {
 			source = fmt.Sprintf("%s:%d", e.SrcHost, e.SrcPort)
 		}
 		out = append(out, fmt.Sprintf(
-			"%s / %s — peer_id=%s peer_tunnel_id=%s source=%s（服务端端口 %d）",
-			e.Name, name, e.ID, e.TunnelID, source, e.RemotePort))
+			"%s / %s — peer_id=%s peer_tunnel_id=%s source=%s",
+			e.Name, name, e.ID, e.TunnelID, source))
 	}
 	return out
 }
@@ -317,7 +372,7 @@ func (c *Client) Track(tunnelID, srcHost string, srcPort, remotePort int, name s
 		TunnelID:   tunnelID,
 		SrcHost:    srcHost,
 		SrcPort:    srcPort,
-		RemotePort: remotePort,
+		RemotePort: 0,
 		Name:       name,
 	}
 	c.mu.Unlock()
@@ -334,27 +389,202 @@ func (c *Client) Untrack(tunnelID string) {
 // Publish 向服务端上报当前全部 Export 隧道。
 // 全量快照而非增量：增量一旦丢失一条消息，两端将永久不一致且难以察觉。
 // Publish reports the full Export snapshot so one lost incremental message cannot cause permanent drift.
-func (c *Client) Publish() {
+func (c *Client) Publish() error {
+	c.publishMu.Lock()
+	defer c.publishMu.Unlock()
 	c.mu.RLock()
 	list := make([]proto.TunnelSpec, 0, len(c.published))
 	for _, spec := range c.published {
 		list = append(list, spec)
 	}
 	c.mu.RUnlock()
-
+	sort.Slice(list, func(i, j int) bool { return list[i].TunnelID < list[j].TunnelID })
+	var ack proto.PublishOK
 	err := c.request(proto.Publish{
 		V:       proto.Version,
 		Type:    proto.TypePublish,
 		Tunnels: list,
-	}, proto.TypePublishOK, nil)
+	}, proto.TypePublishOK, &ack)
 	if err != nil {
 		// 上报失败不影响已建立的转发本身——隧道照常工作，只是别人看不到它。
 		// 故记录警告而非中断隧道。
 		// A publish failure affects discovery, not the established forward, so warn without stopping it.
 		c.log.Warnf("ctrl", "上报隧道列表失败: %v", err)
+		return err
+	}
+	if len(ack.Targets) != len(list) {
+		c.fail(errors.New("发布确认缺少目标身份"))
+		return c.Cause()
+	}
+	c.mu.Lock()
+	targets := make(map[string]proto.Target, len(ack.Targets))
+	for _, target := range ack.Targets {
+		if !target.Valid() || target.ClientID != c.self.ClientID || target.Fingerprint != c.self.Fingerprint || target.SessionID != c.self.SessionID {
+			c.mu.Unlock()
+			err := errors.New("发布确认的会话身份无效")
+			c.fail(err)
+			return err
+		}
+		if _, exists := targets[target.TunnelID]; exists {
+			c.mu.Unlock()
+			err := errors.New("发布确认的目标重复")
+			c.fail(err)
+			return err
+		}
+		targets[target.TunnelID] = target
+	}
+	for _, spec := range list {
+		target, ok := targets[spec.TunnelID]
+		if !ok {
+			c.mu.Unlock()
+			err := errors.New("发布确认的隧道不符")
+			c.fail(err)
+			return err
+		}
+		if exp := c.exports[spec.TunnelID]; exp != nil && exp.spec == spec {
+			exp.target = target
+		}
+	}
+	c.mu.Unlock()
+	c.log.Infof("ctrl", "已上报 %d 条隧道", len(list))
+	return nil
+}
+
+type exportState struct {
+	spec        proto.TunnelSpec
+	target      proto.Target
+	ctx         context.Context
+	cancel      context.CancelFunc
+	connections map[io.Closer]struct{}
+}
+
+// ServeExport advertises an explicit tunnel and waits for its cancellation.
+// Incoming forwarding channels are dispatched by the one connection-wide reader.
+func (c *Client) ServeExport(ctx context.Context, cfg config.Tunnel, ready func()) error {
+	if cfg.ID == "" || cfg.LocalPort < 1 || cfg.LocalPort > 65535 {
+		return &proto.Error{Code: proto.CodeBadRequest, Msg: "导出隧道ID或本地端口无效"}
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	host := cfg.LocalHost
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	exp := &exportState{spec: proto.TunnelSpec{TunnelID: cfg.ID, SrcHost: host, SrcPort: cfg.LocalPort, Name: cfg.Name}, ctx: ctx, cancel: cancel, connections: map[io.Closer]struct{}{}}
+	c.mu.Lock()
+	if _, exists := c.exports[cfg.ID]; exists {
+		c.mu.Unlock()
+		cancel()
+		return errors.New("导出隧道ID重复")
+	}
+	c.exports[cfg.ID] = exp
+	c.published[cfg.ID] = exp.spec
+	c.mu.Unlock()
+	defer func() {
+		cancel()
+		c.mu.Lock()
+		delete(c.exports, cfg.ID)
+		delete(c.published, cfg.ID)
+		var closeList []io.Closer
+		for conn := range exp.connections {
+			closeList = append(closeList, conn)
+		}
+		c.mu.Unlock()
+		for _, conn := range closeList {
+			_ = conn.Close()
+		}
+		select {
+		case <-c.done:
+		default:
+			_ = c.Publish()
+		}
+	}()
+	if err := c.Publish(); err != nil {
+		return err
+	}
+	if ready != nil {
+		ready()
+	}
+	select {
+	case <-ctx.Done():
+		return nil
+	case <-c.done:
+		return c.Cause()
+	}
+}
+
+func (c *Client) forwardLoop(channels <-chan ssh.NewChannel) {
+	for newCh := range channels {
+		target, err := proto.DecodeOpen(newCh.ExtraData())
+		if err != nil {
+			_ = newCh.Reject(ssh.Prohibited, "invalid target")
+			continue
+		}
+		select {
+		case c.forwardSlots <- struct{}{}:
+			go func(n ssh.NewChannel, t proto.Target) { defer func() { <-c.forwardSlots }(); c.serveForward(n, t) }(newCh, target)
+		default:
+			_ = newCh.Reject(ssh.ResourceShortage, "export channel limit")
+		}
+	}
+}
+
+func (c *Client) serveForward(newCh ssh.NewChannel, target proto.Target) {
+	c.mu.RLock()
+	exp := c.exports[target.TunnelID]
+	valid := exp != nil && exp.target == target && exp.ctx.Err() == nil
+	c.mu.RUnlock()
+	if !valid {
+		_ = newCh.Reject(ssh.Prohibited, "stale or unacknowledged publication")
 		return
 	}
-	c.log.Infof("ctrl", "已上报 %d 条隧道", len(list))
+	dialCtx, cancel := context.WithTimeout(exp.ctx, 10*time.Second)
+	defer cancel()
+	conn, err := (&net.Dialer{}).DialContext(dialCtx, "tcp", net.JoinHostPort(exp.spec.SrcHost, fmt.Sprint(exp.spec.SrcPort)))
+	if err != nil {
+		_ = newCh.Reject(ssh.ConnectionFailed, "local service unavailable")
+		return
+	}
+	defer conn.Close()
+	c.mu.Lock()
+	valid = c.exports[target.TunnelID] == exp && exp.target == target && exp.ctx.Err() == nil
+	if valid {
+		exp.connections[conn] = struct{}{}
+	}
+	c.mu.Unlock()
+	if !valid {
+		_ = newCh.Reject(ssh.Prohibited, "publication revoked")
+		return
+	}
+	defer func() { c.mu.Lock(); delete(exp.connections, conn); c.mu.Unlock() }()
+	deadline := time.AfterFunc(10*time.Second, func() { c.fail(errors.New("转发channel建立超时")) })
+	ch, reqs, err := newCh.Accept()
+	deadline.Stop()
+	if err != nil {
+		return
+	}
+	defer ch.Close()
+	go ssh.DiscardRequests(reqs)
+	c.mu.Lock()
+	valid = c.exports[target.TunnelID] == exp && exp.target == target && exp.ctx.Err() == nil
+	if valid {
+		exp.connections[ch] = struct{}{}
+	}
+	c.mu.Unlock()
+	if !valid {
+		return
+	}
+	defer func() { c.mu.Lock(); delete(exp.connections, ch); c.mu.Unlock() }()
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); _, _ = io.Copy(ch, conn); _ = ch.CloseWrite() }()
+	go func() {
+		defer wg.Done()
+		_, _ = io.Copy(conn, ch)
+		if tcp, ok := conn.(*net.TCPConn); ok {
+			_ = tcp.CloseWrite()
+		}
+	}()
+	wg.Wait()
 }
 
 // 编译期断言：Client 必须满足 tunnel 包的两个接口。

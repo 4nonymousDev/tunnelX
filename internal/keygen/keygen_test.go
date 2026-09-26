@@ -78,8 +78,8 @@ func TestGenerateComment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("解析公钥: %v", err)
 	}
-	if !strings.HasPrefix(comment, "DEV-PC@") {
-		t.Errorf("注释 = %q，期望以 %q 开头", comment, "DEV-PC@")
+	if comment != "DEV-PC" {
+		t.Errorf("注释 = %q，期望用户提供的名称而非自动收集主机名", comment)
 	}
 }
 
@@ -102,6 +102,21 @@ func TestGenerateWithMetadataRoundTrip(t *testing.T) {
 	}
 	if strings.Contains(comment, "@DEV-PC") {
 		t.Fatalf("structured metadata was modified as a legacy comment: %q", comment)
+	}
+}
+
+func TestOptionalMetadataDoesNotCollectMachineIdentity(t *testing.T) {
+	metadata, err := NewMetadata("", "")
+	if err != nil || metadata != (Metadata{}) {
+		t.Fatalf("optional metadata = %#v, %v", metadata, err)
+	}
+	res, err := GenerateWithMetadata(t.TempDir(), "tunnel_key", metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, comment, _, _, err := ssh.ParseAuthorizedKey([]byte(res.PublicKey))
+	if err != nil || comment != "" {
+		t.Fatalf("unexpected identifying comment %q, %v", comment, err)
 	}
 }
 

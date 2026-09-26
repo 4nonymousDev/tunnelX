@@ -1,12 +1,12 @@
 const fs = require('node:fs')
 const path = require('node:path')
 
-const { listPackage } = require('@electron/asar')
 
-const sensitiveName = /^(?:\.env(?:\..*)?|config\.json|tunnel_key(?:\.pub)?|host_key(?:\.pub)?|known_hosts|authorized_keys|\.tunnelx-control\.json|tunnelx\.log(?:\..*)?|.*\.(?:pem|pfx|p12|jks|keystore|key))$/i
+const sensitiveName = /^(?:\.git|\.env(?:\..*)?|config\.json(?:\.tmp)?|admin\.token(?:\..*)?|tunnel-server\.db(?:[-.].*)?|interface-lock\.json(?:\..*)?|tunnel_key(?:\.pub)?|host_key(?:\.pub)?|known_hosts|authorized_keys|\.authorized_keys-.*\.tmp|\.tunnelx-control\.json|tunnelx\.log(?:\..*)?|.*\.(?:pem|pfx|p12|jks|keystore|key))$/i
 const sensitiveContent = /(?:BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY|github_pat_[A-Za-z0-9_]{20,}|ghp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|[A-Za-z]:\\Users\\[^\\\s"']+)/
 
 module.exports = async function verifyPackage(context) {
+  const { listPackage } = await import('@electron/asar')
   const resources = path.join(context.appOutDir, 'resources')
   const archive = path.join(resources, 'app.asar')
   const entries = listPackage(archive, {})
@@ -15,6 +15,7 @@ module.exports = async function verifyPackage(context) {
   for (const entry of entries) {
     const normalized = entry.replaceAll('\\', '/').replace(/^\//, '')
     const base = path.posix.basename(normalized)
+    if (base.endsWith('.pre-v2.bak')) failures.push(`配置迁移备份进入 app.asar: ${normalized}`)
     if (sensitiveName.test(base)) failures.push(`敏感文件名进入 app.asar: ${normalized}`)
 
   }
@@ -25,13 +26,13 @@ module.exports = async function verifyPackage(context) {
       if (!/\.(?:js|css|html|json)$/i.test(file)) continue
       const source = fs.readFileSync(file, 'utf8')
       const match = source.match(sensitiveContent)
-      if (match) failures.push(`应用产物包含疑似本机路径或凭据: ${path.relative(projectDir, file)} (${match[0].slice(0, 80)})`)
+      if (match) failures.push(`应用产物包含疑似本机路径或凭据: ${path.relative(projectDir, file)}（内容已隐藏）`)
     }
   }
 
   for (const file of walk(resources)) {
     if (file === archive) continue
-    if (sensitiveName.test(path.basename(file))) {
+    if (sensitiveName.test(path.basename(file)) || file.endsWith('.pre-v2.bak')) {
       failures.push(`敏感文件进入 resources: ${path.relative(resources, file)}`)
     }
   }

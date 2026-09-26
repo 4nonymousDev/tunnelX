@@ -1,6 +1,6 @@
 {
   "name": "tunnelx-desktop",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "private": true,
   "description": "TunnelX desktop frontend",
   "main": "dist-electron/main/index.js",
@@ -13,21 +13,23 @@
     "verify:preload": "node scripts/verify-preload.mjs",
     "verify:release-notes": "node scripts/verify-release-notes.mjs",
     "build": "npm run typecheck && npm run build:renderer && npm run build:electron && npm run verify:preload",
-    "package": "npm run build && electron-builder"
+    "package": "npm run build && electron-builder",
+    "package:signed": "npm run build && electron-builder --config electron-builder.signed.cjs",
+    "test:security": "npm run build:electron && node --test scripts/security.test.cjs"
   },
   "dependencies": {
-    "electron-updater": "^6.8.9",
-    "vue": "^3.5.21"
+    "electron-updater": "6.8.9",
+    "vue": "3.5.43"
   },
   "devDependencies": {
-    "@electron/asar": "^3.4.1",
-    "@types/node": "^22.18.1",
-    "@vitejs/plugin-vue": "^6.0.1",
-    "electron": "^38.0.0",
-    "electron-builder": "^26.0.12",
-    "typescript": "^5.9.2",
-    "vite": "^7.1.4",
-    "vue-tsc": "^3.0.6"
+    "@electron/asar": "4.3.0",
+    "@types/node": "24.19.0",
+    "@vitejs/plugin-vue": "6.0.9",
+    "electron": "44.4.5",
+    "electron-builder": "26.15.3",
+    "typescript": "5.9.3",
+    "vite": "8.3.1",
+    "vue-tsc": "3.3.11"
   },
   "build": {
     "appId": "com.tunnelx.desktop",

@@ -38,12 +38,11 @@ const displayName = computed(() => props.tunnel.config.name || `隧道 ${props.t
 const route = computed(() => {
   const config = props.tunnel.config
   if (config.kind === 'export') {
-    const destination = props.tunnel.remote_port ? `服务端 :${props.tunnel.remote_port}` : '服务端动态端口'
+    const destination = props.tunnel.state === 'running' ? '已发布' : '等待发布'
     return `${config.local_host || '127.0.0.1'}:${config.local_port || '—'} → ${destination}`
   }
   const peer = config.peer_name || config.peer_id || '未选择对端'
-  const server = props.tunnel.remote_port ? `服务端 :${props.tunnel.remote_port} → ` : ''
-  return `本机 :${config.listen_port || '—'} → ${server}${peer}:${config.peer_src_port || '—'}`
+  return `本机 :${config.listen_port || '—'} → ${peer}:${config.peer_src_port || '—'}`
 })
 const stateLabel = computed(() => ({
   stopped: '已停止',

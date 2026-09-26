@@ -14,8 +14,11 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/term"
+
 	"tunnelx/internal/config"
 	"tunnelx/internal/core"
+	"tunnelx/internal/enrollment"
 	"tunnelx/internal/keygen"
 	"tunnelx/internal/localapi"
 	"tunnelx/internal/logbuf"
@@ -52,6 +55,7 @@ func run(args []string) error {
 	endpointPath := fs.String("endpoint", "", "local control endpoint file")
 	stateDir := fs.String("state-dir", "", "writable directory for known_hosts, logs and control state")
 	acceptFingerprint := fs.String("accept-host-key", "", "accept only this SHA256 host fingerprint")
+	username := fs.String("username", "", "account name (login command)")
 	confirmViaAPI := fs.Bool("confirm-via-api", false, "publish confirmation requests through the local control API")
 	follow := fs.Bool("follow", false, "follow new log entries (logs command)")
 	confirmationID := fs.Uint64("id", 0, "confirmation request id")
@@ -64,6 +68,9 @@ func run(args []string) error {
 		return err
 	}
 	if len(fs.Args()) != 0 {
+		if command == "login" {
+			return fmt.Errorf("login不接受位置参数；请使用 --username，密码将在终端安全输入")
+		}
 		return fmt.Errorf("未知参数: %s", strings.Join(fs.Args(), " "))
 	}
 
@@ -91,6 +98,8 @@ func run(args []string) error {
 	switch command {
 	case "run":
 		return runDaemon(cfg, endpoint, *acceptFingerprint, *confirmViaAPI)
+	case "login":
+		return runLogin(endpoint, *username, *acceptFingerprint)
 	case "status", "connect", "disconnect", "logs", "tunnels", "confirm":
 		return runControl(command, endpoint, *follow, *confirmationID, *accept, *reject)
 	default:
@@ -103,7 +112,8 @@ func usage() {
 
 Usage:
   tunnelx-cli run [--config path] [--accept-host-key SHA256:...] [--confirm-via-api]
-  tunnelx-cli keygen --username NAME --email EMAIL [--output path]
+  tunnelx-cli keygen [--username NAME] [--email EMAIL] [--output path]
+  tunnelx-cli login --username NAME [--config path] [--accept-host-key SHA256:...]
   tunnelx-cli status [--config path]
   tunnelx-cli connect|disconnect [--config path]
   tunnelx-cli logs [--follow] [--config path]
@@ -125,12 +135,6 @@ func runKeygen(args []string, out io.Writer) error {
 	}
 	if len(fs.Args()) != 0 {
 		return fmt.Errorf("未知参数: %s", strings.Join(fs.Args(), " "))
-	}
-	if strings.TrimSpace(*username) == "" {
-		return fmt.Errorf("keygen需要 --username")
-	}
-	if strings.TrimSpace(*email) == "" {
-		return fmt.Errorf("keygen需要 --email")
 	}
 	rawOutput := strings.TrimSpace(*output)
 	if rawOutput == "" {
@@ -165,7 +169,9 @@ func runKeygen(args []string, out io.Writer) error {
 	fmt.Fprintf(out, "Public key: %s\n", result.PubPath)
 	fmt.Fprintf(out, "Fingerprint: %s\n", result.Fingerprint)
 	fmt.Fprintln(out, "Authorized key line:")
-	fmt.Fprint(out, result.PublicKey)
+	// Keep optional personal comments in the .pub file, out of terminal logs.
+	parts := strings.Fields(result.PublicKey)
+	fmt.Fprintf(out, "%s %s\n", parts[0], parts[1])
 	if result.PermErr != nil {
 		fmt.Fprintf(out, "Warning: could not tighten private-key permissions: %v\n", result.PermErr)
 	}
@@ -316,6 +322,91 @@ func runControl(command, endpoint string, follow bool, confirmationID uint64, ac
 		}
 	}
 	return nil
+}
+
+func readLoginPassword(in *os.File, out io.Writer) ([]byte, error) {
+	if !term.IsTerminal(int(in.Fd())) {
+		return nil, fmt.Errorf("请在交互终端输入密码；不支持命令行或重定向传入密码")
+	}
+	fmt.Fprint(out, "账号密码: ")
+	password, err := term.ReadPassword(int(in.Fd()))
+	fmt.Fprintln(out)
+	if err != nil {
+		return nil, fmt.Errorf("无法安全读取密码")
+	}
+	return password, nil
+}
+
+func runLogin(endpoint, username, expectedFingerprint string) error {
+	username = enrollment.NormalizeUsername(username)
+	if !enrollment.ValidUsername(username) {
+		return fmt.Errorf("请用 --username 指定3至64位账号名")
+	}
+	client, err := localapi.NewClient(endpoint)
+	if err != nil {
+		return err
+	}
+	password, err := readLoginPassword(os.Stdin, os.Stderr)
+	if err != nil {
+		return err
+	}
+	defer clear(password)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	ctx, timeout := context.WithTimeout(ctx, 65*time.Second)
+	defer timeout()
+	result := make(chan error, 1)
+	passwordText := string(password)
+	clear(password)
+	go func() { result <- client.Login(ctx, username, passwordText) }()
+	confirmation := &terminalConfirmation{expectedFingerprint: expectedFingerprint, in: bufio.NewReader(os.Stdin)}
+	seen := make(map[uint64]bool)
+	// The daemon may publish a confirmation before an event stream is established.
+	// Reading its bounded snapshot also lets a separate terminal complete that prompt.
+	ticker := time.NewTicker(300 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case err := <-result:
+			if err == nil {
+				fmt.Println("登录成功，客户端将自动连接。")
+			}
+			return err
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			snap, err := client.Snapshot(ctx)
+			if err != nil {
+				continue
+			}
+			for _, pending := range snap.Pending {
+				if seen[pending.ID] {
+					continue
+				}
+				seen[pending.ID] = true
+				answer := make(chan bool, 1)
+				go func() {
+					accept := false
+					switch pending.Kind {
+					case "host_key":
+						accept = confirmation.ConfirmHostKey(pending.Host, pending.Fingerprint)
+					case "key_permissions":
+						accept = confirmation.FixKeyPermissions(pending.Path, pending.Readers)
+					}
+					answer <- accept
+				}()
+				var accept bool
+				select {
+				case accept = <-answer:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+				if err := client.Confirm(ctx, pending.ID, accept); err != nil {
+					return err
+				}
+			}
+		}
+	}
 }
 
 func followLogs(client *localapi.Client) error {

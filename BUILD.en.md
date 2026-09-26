@@ -6,7 +6,7 @@ See [README.en.md](README.en.md) for a project overview.
 
 | Dependency | Purpose | Verified version |
 |---|---|---|
-| Go 1.22+ | Compilation | go1.26.5 |
+| Go 1.26+ | Compilation | go1.27.1 |
 | Node.js + npm | Build the Electron/Vue desktop app and embedded management UI | Node.js 22+ |
 
 The entire project builds without CGO: **`CGO_ENABLED=0` is sufficient**, so
@@ -15,7 +15,7 @@ cross-compilation works from any platform.
 Verify the toolchain:
 
 ```bash
-go version     # go1.22 or later
+go version     # go1.26 or later
 ```
 
 ## Build
@@ -113,7 +113,6 @@ internal/
   manager/           Global connection loop driving the layers above
   core/              UI-independent app service, snapshots, events, confirmations
   localapi/          Authenticated, versioned local JSON/NDJSON API
-  registry/          Server-side online registry
   session/           Online SSH sessions and forwarding-port ownership
   policy/            Fingerprint blacklist snapshot and authentication gate
   store/             SQLite clients, blacklist, and audit data
@@ -184,3 +183,5 @@ Server logs:
 ```bash
 sudo journalctl -u tunnel-server -f
 ```
+
+Security upgrade (2026-09-26): update both server and clients. Existing keys, IDs and configuration are retained; configuration/database migration takes a backup first. Device ID/public-key bindings require explicit administrator verification. The current protocol routes to the exact exporter session and tunnel generation; legacy TCP port forwarding is removed. Username/email metadata is optional and the key generator no longer collects the hostname. Authorization files with unsupported key options or invalid contents deny new admissions. See [upgrade instructions](UPGRADE_GUIDE.md) and [deployment guide](deploy/README.en.md).

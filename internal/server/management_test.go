@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"net/http/cookiejar"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +16,7 @@ import (
 	"golang.org/x/crypto/ssh"
 	"tunnelx/internal/adminapi"
 	"tunnelx/internal/proto"
+	"tunnelx/internal/session"
 	"tunnelx/internal/store"
 )
 
@@ -55,14 +58,28 @@ func TestManagementAddressMustBeExplicitLoopback(t *testing.T) {
 	}
 }
 
-func TestAdminTokenStrictValidation(t *testing.T) {
-	cfg := managementConfig(t)
-	if err := os.WriteFile(cfg.AdminTokenFile, []byte("short"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if s, e := New(cfg, nil); e == nil {
+func TestLegacyAdminTokenIsIgnoredAndCannotAuthenticate(t *testing.T) {
+	for _, present := range []bool{false, true} {
+		cfg := managementConfig(t)
+		if present {
+			if err := os.WriteFile(cfg.AdminTokenFile, []byte("short"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		} else if err := os.Remove(cfg.AdminTokenFile); err != nil {
+			t.Fatal(err)
+		}
+		s, err := New(cfg, nil)
+		if err != nil {
+			t.Fatalf("legacy token must not affect startup: %v", err)
+		}
+		r := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:2223/api/v1/overview", nil)
+		r.Header.Set("Authorization", "Bearer "+strings.Repeat("a", 64))
+		w := httptest.NewRecorder()
+		s.adminAPI.ServeHTTP(w, r)
 		_ = s.Close()
-		t.Fatal("invalid token accepted")
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("legacy Bearer authenticated: %d", w.Code)
+		}
 	}
 }
 
@@ -75,6 +92,7 @@ func TestImportPublicKeyPersistsAuthorizationAndMetadata(t *testing.T) {
 	defer s.Close()
 	publicKey := genKey(t, filepath.Join(filepath.Dir(cfg.AuthorizedKeys), "imported_key"))
 	result, err := (*adminBackend)(s).ImportPublicKey(context.Background(), adminapi.ImportPublicKeyRequest{
+		ClientID:     "original-device",
 		PublicKey:    strings.TrimSpace(string(publicKey)),
 		Username:     "alice",
 		Email:        "alice@example.com",
@@ -87,6 +105,12 @@ func TestImportPublicKeyPersistsAuthorizationAndMetadata(t *testing.T) {
 	if !s.auth.AuthorizedFingerprint(result.Fingerprint) {
 		t.Fatal("imported key is not authorized")
 	}
+	if result.ClientID != "original-device" {
+		t.Fatalf("registered wrong identity: %#v", result)
+	}
+	if err = s.store.ValidateIdentity(context.Background(), result.Fingerprint, result.ClientID); err != nil {
+		t.Fatalf("registration still needs a separate binding step: %v", err)
+	}
 	client, err := s.store.GetClient(context.Background(), result.Fingerprint)
 	if err != nil {
 		t.Fatal(err)
@@ -95,8 +119,157 @@ func TestImportPublicKeyPersistsAuthorizationAndMetadata(t *testing.T) {
 		t.Fatalf("client=%#v", client)
 	}
 	actions, err := s.store.ListAdminActions(context.Background(), 0, 10)
-	if err != nil || len(actions) != 1 || actions[0].Action != "import_public_key" || actions[0].Result != "success" {
+	if err != nil || len(actions) != 1 || actions[0].Action != "register_client" || actions[0].Result != "success" {
 		t.Fatalf("actions=%#v err=%v", actions, err)
+	}
+}
+
+func TestManagementExplicitIdentityRotationDisconnectsBothKeysAndRevokes(t *testing.T) {
+	cfg := managementConfig(t)
+	s, err := New(cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	b := (*adminBackend)(s)
+	oldFP := ssh.FingerprintSHA256(loadSigner(t, filepath.Join(filepath.Dir(cfg.HostKeyPath), "client_key")).PublicKey())
+	newKey := genKey(t, filepath.Join(filepath.Dir(cfg.HostKeyPath), "replacement_key"))
+	newClient, err := b.ImportPublicKey(ctx, adminapi.ImportPublicKeyRequest{ClientID: "replacement-device", PublicKey: string(newKey), Reason: "approved replacement"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.store.RecordIdentityClaim(ctx, oldFP, "device-verified", "untrusted claim", "192.0.2.1"); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.store.ValidateIdentity(ctx, oldFP, "device-verified"); !errors.Is(err, store.ErrIdentityUnbound) {
+		t.Fatal("candidate automatically trusted")
+	}
+	first, err := b.BindIdentity(ctx, adminapi.BindIdentityRequest{ClientID: "device-verified", Fingerprint: oldFP, Reason: "verified existing public key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fp := range []string{oldFP, newClient.Fingerprint} {
+		if _, err = s.sessions.AddAuthenticated(session.Authenticated{Fingerprint: fp}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stale := s.policy.Version()
+	rotated, err := b.BindIdentity(ctx, adminapi.BindIdentityRequest{ClientID: first.ClientID, Fingerprint: newClient.Fingerprint, ExpectedGeneration: first.Generation, Reason: "verified replacement key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.sessions.Snapshot()) != 0 {
+		t.Fatal("rotation retained a session from old or replacement fingerprint")
+	}
+	if ok, _ := s.policy.AdmitVersion(oldFP, stale, nil); ok {
+		t.Fatal("pre-rotation validation was reusable")
+	}
+	if err = s.store.ValidateIdentity(ctx, oldFP, first.ClientID); !errors.Is(err, store.ErrIdentityMismatch) {
+		t.Fatalf("old key remained trusted: %v", err)
+	}
+	if err = s.store.ValidateIdentity(ctx, newClient.Fingerprint, first.ClientID); err != nil {
+		t.Fatal(err)
+	}
+	if err = b.RevokeIdentity(ctx, rotated.ClientID, rotated.Generation, "device retired"); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.store.ValidateIdentity(ctx, newClient.Fingerprint, first.ClientID); !errors.Is(err, store.ErrIdentityRevoked) {
+		t.Fatal("revoked identity accepted")
+	}
+	if _, err = b.BindIdentity(ctx, adminapi.BindIdentityRequest{ClientID: first.ClientID, Fingerprint: oldFP, ExpectedGeneration: first.Generation, Reason: "stale change"}); !errors.Is(err, adminapi.ErrConflict) {
+		t.Fatalf("stale update accepted: %v", err)
+	}
+}
+
+func TestManagementRejectsAuthorizedKeyOptionsBeforeMutation(t *testing.T) {
+	cfg := managementConfig(t)
+	s, err := New(cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	before, err := os.ReadFile(cfg.AuthorizedKeys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub := genKey(t, filepath.Join(filepath.Dir(cfg.HostKeyPath), "option_key"))
+	_, err = (*adminBackend)(s).ImportPublicKey(context.Background(), adminapi.ImportPublicKeyRequest{ClientID: "device", PublicKey: `from="192.0.2.1" ` + string(pub), Reason: "reject unsupported semantics"})
+	if err == nil {
+		t.Fatal("unsupported key restrictions silently ignored")
+	}
+	after, err := os.ReadFile(cfg.AuthorizedKeys)
+	if err != nil || string(before) != string(after) {
+		t.Fatal("invalid input changed authorization file")
+	}
+	ops, err := s.store.ListAdminOperations(context.Background(), 10)
+	if err != nil || len(ops) != 0 {
+		t.Fatal("invalid input created mutation intent")
+	}
+}
+
+func TestManagementUncertainCommitDisconnectsAffectedSessionsAndPauses(t *testing.T) {
+	for _, change := range []string{"block", "unblock", "bind", "revoke"} {
+		t.Run(change, func(t *testing.T) {
+			cfg := managementConfig(t)
+			s, err := New(cfg, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			ctx := context.Background()
+			b := (*adminBackend)(s)
+			fp := ssh.FingerprintSHA256(loadSigner(t, filepath.Join(filepath.Dir(cfg.HostKeyPath), "client_key")).PublicKey())
+			binding, err := b.BindIdentity(ctx, adminapi.BindIdentityRequest{ClientID: "verified", Fingerprint: fp, Reason: "verified existing key"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			newKey := genKey(t, filepath.Join(filepath.Dir(cfg.HostKeyPath), "replacement_key"))
+			other, err := b.ImportPublicKey(ctx, adminapi.ImportPublicKeyRequest{ClientID: "replacement-device", PublicKey: string(newKey), Reason: "verified replacement"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if change == "unblock" {
+				if err = b.BlockClient(ctx, fp, adminapi.BlockRequest{Reason: "previous block"}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, key := range []string{fp, other.Fingerprint} {
+				if _, err = s.sessions.AddAuthenticated(session.Authenticated{Fingerprint: key}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, q := range []string{`CREATE TABLE commit_fault(fingerprint TEXT REFERENCES clients(fingerprint) DEFERRABLE INITIALLY DEFERRED)`, `CREATE TRIGGER fail_commit BEFORE INSERT ON admin_actions BEGIN INSERT INTO commit_fault VALUES('missing-client'); END`} {
+				if _, err = s.store.DB().Exec(q); err != nil {
+					t.Fatal(err)
+				}
+			}
+			switch change {
+			case "block":
+				err = b.BlockClient(ctx, fp, adminapi.BlockRequest{Reason: "new block"})
+			case "unblock":
+				err = b.UnblockClient(ctx, fp, "verified unblock")
+			case "bind":
+				_, err = b.BindIdentity(ctx, adminapi.BindIdentityRequest{ClientID: "verified", Fingerprint: other.Fingerprint, ExpectedGeneration: binding.Generation, Reason: "verified rotation"})
+			case "revoke":
+				err = b.RevokeIdentity(ctx, "verified", binding.Generation, "retired")
+			}
+			if !errors.Is(err, store.ErrCommitOutcomeUnknown) {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			for _, active := range s.sessions.Snapshot() {
+				if active.Fingerprint == fp || change == "bind" {
+					t.Fatalf("affected session survived uncertain commit: %+v", active)
+				}
+			}
+			if ok, _ := s.policy.Admit("unrelated", nil); ok {
+				t.Fatal("new admissions continued")
+			}
+			overview, e := b.Overview(ctx)
+			if e != nil || overview.StorageHealthy || overview.StorageStatus != "commit_uncertain" {
+				t.Fatalf("missing management alert: %+v %v", overview, e)
+			}
+		})
 	}
 }
 
@@ -112,17 +285,25 @@ func TestManagementAPIAndShutdown(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	defer s.Close()
+	if _, e = s.store.ProvisionAdminAccount(context.Background(), "admin", "test administrator password", store.AdminAction{Operator: "local-admin", Reason: "test initialization"}); e != nil {
+		t.Fatal(e)
+	}
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{Jar: jar, Timeout: 3 * time.Second}
 	done := make(chan error, 1)
 	go func() { done <- s.ListenAndServe() }()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		req, _ := http.NewRequest(http.MethodGet, "http://"+cfg.AdminAddr+"/api/v1/overview", nil)
-		req.Header.Set("Authorization", "Bearer "+strings.Repeat("a", 64))
-		resp, e := http.DefaultClient.Do(req)
+		origin := "http://" + cfg.AdminAddr
+		req, _ := http.NewRequest(http.MethodPost, origin+"/api/v1/auth/login", strings.NewReader(`{"username":"admin","password":"test administrator password"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", origin)
+		resp, e := client.Do(req)
 		if e == nil {
 			resp.Body.Close()
 			if resp.StatusCode != 200 {
-				t.Fatalf("admin status %d", resp.StatusCode)
+				t.Fatalf("admin login status %d", resp.StatusCode)
 			}
 			break
 		}
@@ -130,6 +311,16 @@ func TestManagementAPIAndShutdown(t *testing.T) {
 			t.Fatalf("admin not ready: %v", e)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+	for _, endpoint := range []string{"/api/v1/auth/session", "/api/v1/overview"} {
+		resp, err := client.Get("http://" + cfg.AdminAddr + endpoint)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("cookie session %s status %d", endpoint, resp.StatusCode)
+		}
 	}
 	if e = s.Close(); e != nil {
 		t.Fatal(e)
@@ -158,30 +349,13 @@ func TestOnlyOneControlChannel(t *testing.T) {
 	}
 }
 
-func TestCancelForwardClosesListener(t *testing.T) {
+func TestLegacyForwardListenerRejected(t *testing.T) {
 	client := connectTestServer(t)
-	ln, e := client.Listen("tcp", "127.0.0.1:0")
-	if e != nil {
-		t.Fatal(e)
-	}
-	addr := ln.Addr().String()
-	if e = ln.Close(); e != nil {
-		t.Fatal(e)
-	}
-	deadline := time.Now().Add(3 * time.Second)
-	for {
-		c, e := net.DialTimeout("tcp", addr, 50*time.Millisecond)
-		if e != nil {
-			return
-		}
-		c.Close()
-		if time.Now().After(deadline) {
-			t.Fatal("cancel-forward left listener reachable")
-		}
-		time.Sleep(20 * time.Millisecond)
+	if ln, err := client.Listen("tcp", "127.0.0.1:0"); err == nil {
+		ln.Close()
+		t.Fatal("legacy TCP forwarding must not allocate a listener in v2")
 	}
 }
-
 func TestRejectedAuthenticationAndFailedAdminActionAreAudited(t *testing.T) {
 	cfg := managementConfig(t)
 	s, e := New(cfg, nil)
@@ -193,8 +367,11 @@ func TestRejectedAuthenticationAndFailedAdminActionAreAudited(t *testing.T) {
 	fp := "SHA256:" + strings.Repeat("A", 43)
 	s.recordRejected(fp, "127.0.0.1:1", "rejected")
 	events, e := s.store.ListConnections(ctx, store.AuditFilter{Fingerprint: fp, Limit: 10})
-	if e != nil || len(events) != 1 || events[0].Result != "rejected" {
-		t.Fatalf("rejection audit=%+v err=%v", events, e)
+	if e != nil || len(events) != 0 {
+		t.Fatalf("anonymous rejection created per-attempt records: %+v err=%v", events, e)
+	}
+	if n, _, err := s.store.TodayRejected(ctx, time.Now()); err != nil || n != 1 {
+		t.Fatalf("rejection aggregate=%d err=%v", n, err)
 	}
 	b := (*adminBackend)(s)
 	missing := "SHA256:" + strings.Repeat("B", 43)
@@ -238,50 +415,68 @@ func TestHelloTimeoutClosesAuthenticatedConnection(t *testing.T) {
 
 func TestMixedRolePublishAndCancelUpdatesRegistry(t *testing.T) {
 	cfg := managementConfig(t)
-	cfg.AdminAddr = ""
-	cfg.AdminTokenFile = ""
+	cfg.AdminAddr, cfg.AdminTokenFile = "", ""
 	probe, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	cfg.Addr = probe.Addr().String()
-	_ = probe.Close()
+	probe.Close()
 	s, err := New(cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	serveDone := make(chan error, 1)
-	go func() { serveDone <- s.ListenAndServe() }()
-	t.Cleanup(func() { _ = s.Close(); <-serveDone })
-
-	client := dialWith(t, cfg.Addr, filepath.Join(filepath.Dir(cfg.HostKeyPath), "client_key"))
-	pc, controlChannel := openTestControl(t, client, proto.RoleImporter, "mixed-role")
-	defer controlChannel.Close()
-	remote, err := client.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
+	keyPath := filepath.Join(filepath.Dir(cfg.HostKeyPath), "client_key")
+	fp := ssh.FingerprintSHA256(loadSigner(t, keyPath).PublicKey())
+	if _, err = s.store.BindIdentity(context.Background(), "mixed-role", fp, 0, store.AdminAction{Operator: "test-admin", Reason: "preverified device"}); err != nil {
 		t.Fatal(err)
 	}
-	port := remote.Addr().(*net.TCPAddr).Port
-	publishTestPort(t, pc, port)
-	if got := len(s.reg.Snapshot()); got != 1 {
-		t.Fatalf("mixed-role publish produced %d registry entries, want 1", got)
+	done := make(chan error, 1)
+	go func() { done <- s.ListenAndServe() }()
+	t.Cleanup(func() { s.Close(); <-done })
+	client := dialWith(t, cfg.Addr, keyPath)
+	pc, channel := openTestControl(t, client, proto.RoleImporter, "mixed-role")
+	defer channel.Close()
+	ack := publishManagementTunnels(t, pc, []proto.TunnelSpec{{TunnelID: "test", SrcHost: "127.0.0.1", SrcPort: 8080, Name: "mixed export"}})
+	if len(ack.Targets) != 1 || !ack.Targets[0].Valid() || ack.Targets[0].Fingerprint != fp {
+		t.Fatalf("invalid trusted targets: %+v", ack.Targets)
+	}
+	if got := len(s.sessions.RegistrySnapshot()); got != 1 {
+		t.Fatalf("mixed-role registry entries=%d", got)
 	}
 	overview, err := (*adminBackend)(s).Overview(context.Background())
 	if err != nil || overview.Importers != 1 || overview.ActiveExporters != 1 {
-		t.Fatalf("mixed-role overview=%+v err=%v", overview, err)
+		t.Fatalf("overview=%+v err=%v", overview, err)
 	}
-	if err = remote.Close(); err != nil {
-		t.Fatal(err)
-	}
-	deadline := time.Now().Add(2 * time.Second)
-	for len(s.reg.Snapshot()) != 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("cancel-forward left the published port in the registry")
-		}
-		time.Sleep(10 * time.Millisecond)
+	publishManagementTunnels(t, pc, nil)
+	if got := len(s.sessions.RegistrySnapshot()); got != 0 {
+		t.Fatalf("cancel left registry entries=%d", got)
 	}
 }
 
+func publishManagementTunnels(t *testing.T, pc *proto.Conn, tunnels []proto.TunnelSpec) proto.PublishOK {
+	t.Helper()
+	if err := pc.Send(proto.Publish{V: proto.Version, Type: proto.TypePublish, Tunnels: tunnels}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		env, raw, err := pc.Recv()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if env.Type == proto.TypeRegistry {
+			continue
+		}
+		if env.Type != proto.TypePublishOK {
+			t.Fatalf("publish rejected: %s %s", env.Type, raw)
+		}
+		var ack proto.PublishOK
+		if err = proto.Decode(raw, &ack); err != nil {
+			t.Fatal(err)
+		}
+		return ack
+	}
+}
 func TestAuditCursorMergesConnectionAndAccessEvents(t *testing.T) {
 	cfg := managementConfig(t)
 	s, err := New(cfg, nil)

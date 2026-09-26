@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"tunnelx/internal/server"
 )
@@ -32,13 +33,47 @@ func main() {
 	flag.StringVar(&cfg.HostKeyPath, "hostkey", "host_key", "服务端主机密钥路径")
 	flag.StringVar(&cfg.AuthorizedKeys, "auth", "authorized_keys", "授权公钥文件路径")
 	flag.StringVar(&cfg.AdminAddr, "admin-addr", "127.0.0.1:2223", "管理端监听地址（仅允许明确的 loopback IP）")
-	flag.StringVar(&cfg.AdminTokenFile, "admin-token-file", "admin.token", "管理端 Bearer Token 文件")
+	flag.StringVar(&cfg.AdminTokenFile, "admin-token-file", "", "已弃用并忽略；管理端改用管理员账号登录")
 	flag.StringVar(&cfg.DataDir, "data-dir", "data", "SQLite 数据目录")
+	flag.DurationVar(&cfg.HandshakeTimeout, "handshake-timeout", 10*time.Second, "SSH 握手最长耗时")
+	flag.DurationVar(&cfg.OpenTimeout, "open-timeout", 10*time.Second, "等待导出端接受转发的最长耗时")
+	flag.DurationVar(&cfg.WriteTimeout, "write-timeout", 10*time.Second, "控制消息写入最长耗时")
+	flag.IntVar(&cfg.Limits.MaxConnections, "max-connections", 64, "全部 TCP 连接上限")
+	flag.IntVar(&cfg.Limits.MaxHandshakes, "max-handshakes", 16, "并发 SSH 握手上限")
+	flag.IntVar(&cfg.Limits.MaxHandshakesPerIP, "max-handshakes-per-ip", 4, "单个来源 IP 并发握手上限")
+	flag.IntVar(&cfg.Limits.SessionsPerKey, "max-sessions-per-key", 8, "每个公钥的会话上限")
+	flag.IntVar(&cfg.Limits.ExportsPerSession, "max-exports-per-session", 64, "每个会话的发布隧道上限")
+	flag.IntVar(&cfg.Limits.ExportsTotal, "max-exports", 1024, "全部发布隧道上限")
+	flag.IntVar(&cfg.Limits.ChannelsPerSession, "max-channels-per-session", 32, "每个会话的业务通道上限")
+	flag.IntVar(&cfg.Limits.ChannelsTotal, "max-channels", 256, "全部业务通道上限（一次转发占用两端各一个）")
 	showVersion := flag.Bool("version", false, "显示版本后退出")
+	checkAuth := flag.Bool("check-auth", false, "只校验授权公钥文件，成功后退出，不监听或迁移数据库")
+	adminAccount := flag.String("admin-account", "", "先停止服务，再创建或重设指定管理员账号后退出（交互输入密码）")
 	flag.Parse()
+	// In particular, reject a trailing "-- -version". Otherwise an upgrade
+	// preflight can accidentally start the real server and migrate its database.
+	if flag.NArg() != 0 {
+		fmt.Fprintln(os.Stderr, "不接受位置参数；请使用明确的命令行选项")
+		os.Exit(2)
+	}
 
 	if *showVersion {
 		fmt.Println("tunnel-server", Version)
+		return
+	}
+	if *checkAuth {
+		if err := server.CheckAuthorizedKeys(cfg.AuthorizedKeys); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Println("authorized_keys: valid")
+		return
+	}
+	if *adminAccount != "" {
+		if err := runAdminAccount(cfg.DataDir, *adminAccount, os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 		return
 	}
 	cfg.Version = Version

@@ -75,8 +75,8 @@ func TestAuthKeysStrictReloadAndEmpty(t *testing.T) {
 	a.checkedAt = time.Now().Add(-reloadInterval)
 	a.mu.Unlock()
 	a.maybeReload()
-	if !a.Authorized(pub) || a.Count() != 1 {
-		t.Fatal("failed reload replaced snapshot")
+	if a.Authorized(pub) || a.Count() != 1 {
+		t.Fatal("failed reload must deny admission and retain snapshot for diagnosis")
 	}
 	if err = os.WriteFile(path, nil, 0600); err != nil {
 		t.Fatal(err)
@@ -87,5 +87,42 @@ func TestAuthKeysStrictReloadAndEmpty(t *testing.T) {
 	a.maybeReload()
 	if a.Count() != 0 {
 		t.Fatal("valid empty file did not revoke last key")
+	}
+}
+
+func TestAuthKeysRejectOptionsAndRecover(t *testing.T) {
+	pub, line := testAuthorizedLine(t)
+	path := filepath.Join(t.TempDir(), "authorized_keys")
+	if err := os.WriteFile(path, line, 0600); err != nil {
+		t.Fatal(err)
+	}
+	a, err := newAuthKeys(path, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restricted := "from=\"127.0.0.1\" " + string(line)
+	if _, _, err = parseAuthorizedKeys([]byte(restricted)); err == nil {
+		t.Fatal("ignored authorization options")
+	}
+	if _, err = a.Import(restricted, ""); err == nil {
+		t.Fatal("import ignored authorization options")
+	}
+	if err = os.WriteFile(path, []byte(restricted), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a.mu.Lock()
+	a.checkedAt = time.Time{}
+	a.mu.Unlock()
+	if a.Authorized(pub) {
+		t.Fatal("broken authorization file failed open")
+	}
+	if err = os.WriteFile(path, line, 0600); err != nil {
+		t.Fatal(err)
+	}
+	a.mu.Lock()
+	a.checkedAt = time.Time{}
+	a.mu.Unlock()
+	if !a.Authorized(pub) {
+		t.Fatal("restored original file did not recover")
 	}
 }

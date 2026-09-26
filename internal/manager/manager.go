@@ -44,11 +44,11 @@ type ConnStatus struct {
 }
 
 // KeyPermPrompt 在私钥权限过宽时征询用户。
-// 返回 fix=true 表示用户选择"自动修复权限"；false 表示"忽略并继续"。
+// 返回 fix=true 表示用户选择修复权限；false 取消连接。
 // 采用「提示 + 可忽略」而非直接拒绝——保留"我知道我在干什么"的出口，
 // 避免在临时机器上被卡死。
 // KeyPermPrompt asks the user what to do when private-key permissions are too broad.
-// fix=true means repair automatically; false means ignore and continue. Prompting with
+// fix=true means repair automatically; false means cancel connection. Prompting with
 // an override preserves an expert escape hatch and avoids blocking use on temporary machines.
 type KeyPermPrompt func(path string, readers []string) (fix bool)
 
@@ -149,7 +149,7 @@ func (m *Manager) AddTunnel(tc config.Tunnel) error {
 	ctx, conn, ctrl := m.runCtx, m.conn, m.ctrl
 	m.mu.Unlock()
 
-	if err := m.cfg.Save(); err != nil {
+	if err := m.saveConfig(); err != nil {
 		return fmt.Errorf("保存配置: %w", err)
 	}
 	m.log.Infof("app", "已添加隧道: %s", t.Label())
@@ -178,6 +178,9 @@ func (m *Manager) UpdateTunnel(i int, tc config.Tunnel) error {
 	old := m.tunnels[i]
 	oldConfig := old.Config()
 	m.mu.RUnlock()
+	if tc.Kind == config.KindImport && tc.PeerID == oldConfig.PeerID && tc.PeerFingerprint == "" {
+		tc.PeerFingerprint = oldConfig.PeerFingerprint
+	}
 	if tc.ID == "" {
 		tc.ID = oldConfig.ID
 	}
@@ -201,15 +204,17 @@ func (m *Manager) UpdateTunnel(i int, tc config.Tunnel) error {
 		}
 	}
 
-	t := tunnel.New(tc, m.log, m.onTunnelChange)
-
 	m.mu.Lock()
+	if tc.Kind == config.KindImport && tc.PeerID == m.cfg.Tunnels[i].PeerID && tc.PeerFingerprint == "" {
+		tc.PeerFingerprint = m.cfg.Tunnels[i].PeerFingerprint
+	}
+	t := tunnel.New(tc, m.log, m.onTunnelChange)
 	m.tunnels[i] = t
 	m.cfg.Tunnels[i] = tc
 	ctx, conn, ctrl := m.runCtx, m.conn, m.ctrl
 	m.mu.Unlock()
 
-	if err := m.cfg.Save(); err != nil {
+	if err := m.saveConfig(); err != nil {
 		return fmt.Errorf("保存配置: %w", err)
 	}
 	m.log.Infof("app", "已更新隧道: %s", t.Label())
@@ -239,7 +244,7 @@ func (m *Manager) RemoveTunnel(i int) error {
 
 	t.Stop()
 
-	if err := m.cfg.Save(); err != nil {
+	if err := m.saveConfig(); err != nil {
 		return fmt.Errorf("保存配置: %w", err)
 	}
 	m.log.Infof("app", "已删除隧道: %s", label)
@@ -349,6 +354,9 @@ func (m *Manager) loop(ctx context.Context) {
 		}
 
 		err := m.connectAndServe(ctx)
+		if m.ConnStatus().State == ConnConnected {
+			backoff.Reset()
+		}
 
 		if ctx.Err() != nil {
 			return
@@ -365,7 +373,7 @@ func (m *Manager) loop(ctx context.Context) {
 			return
 		}
 
-		wait := backoff.Next()
+		wait := backoff.NextFor(err)
 		m.log.Warnf("conn", "%s；%s 后重试", fault.Reason, wait.Round(time.Second))
 		m.setConnStatus(ConnStatus{
 			State:   ConnRetrying,
@@ -433,6 +441,7 @@ func (m *Manager) connectAndServe(ctx context.Context) error {
 	}
 	defer ctrl.Close()
 	ctrl.SetOnRegistry(m.onRegistry)
+	ctrl.SetOnTargetResolved(m.bindResolvedTarget)
 
 	m.mu.Lock()
 	m.conn = conn
@@ -524,7 +533,7 @@ func (m *Manager) stopTunnels() {
 // keyPath must be a resolved absolute path (see config.ResolvedKeyPath).
 func (m *Manager) checkKeyPerm(keyPath string) error {
 	if keyPath == "" {
-		return tunnel.NotConfigured("尚未配置私钥路径，请点「设置」填写或「生成…」")
+		return tunnel.NotConfigured("尚未配置设备凭据，请使用账号登录自动登记此设备")
 	}
 
 	// 提前检查文件是否存在，给出比"读取私钥失败"更明确的提示。
@@ -535,10 +544,8 @@ func (m *Manager) checkKeyPerm(keyPath string) error {
 
 	res := keyperm.Check(keyPath)
 	if res.Err != nil {
-		// 检查本身失败不应阻断连接——留痕即可。
-		// A failure of the permission check itself should be logged, not block connection.
-		m.log.Warnf("conn", "私钥权限检查失败: %v", res.Err)
-		return nil
+		// Permissions that cannot be verified are not safe to use.
+		return tunnel.NotConfigured(fmt.Sprintf("私钥权限检查失败，连接已停止: %v", res.Err))
 	}
 	if res.OK {
 		return nil
@@ -547,19 +554,56 @@ func (m *Manager) checkKeyPerm(keyPath string) error {
 	m.log.Warnf("conn", "私钥 %s 可被以下主体读取: %v", keyPath, res.Readers)
 
 	if m.keyPermPrompt == nil {
-		return nil // 无 UI 可询问时放行，与"忽略并继续"等价 / With no UI to ask, allow it as “ignore and continue.”
-		// Without a UI prompt, allow it as the equivalent of "ignore and continue."
+		return tunnel.NotConfigured("私钥可被其他主体读取，请收紧文件权限后重连")
 	}
 	if !m.keyPermPrompt(keyPath, res.Readers) {
-		m.log.Warnf("conn", "用户选择忽略私钥权限风险")
-		return nil
+		return tunnel.NotConfigured("未修复私钥权限，连接已停止")
 	}
 
 	if err := keyperm.Fix(keyPath); err != nil {
 		m.log.Errorf("conn", "修复私钥权限失败: %v", err)
-		return nil // 修复失败不阻断连接，用户已知情 / A failed repair does not block a connection after warning the user.
-		// A failed repair does not block connection because the user has acknowledged the risk.
+		return tunnel.NotConfigured(fmt.Sprintf("修复私钥权限失败，连接已停止: %v", err))
 	}
 	m.log.Infof("conn", "已收紧私钥权限")
+	if check := keyperm.Check(keyPath); check.Err != nil || !check.OK {
+		return tunnel.NotConfigured("修复后私钥权限仍未通过检查")
+	}
 	return nil
+}
+
+func (m *Manager) saveConfig() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.cfg.Save()
+}
+
+// bindResolvedTarget persists only identities checked against the server's
+// administrator-approved directory. Never replaces an existing device pin.
+func (m *Manager) bindResolvedTarget(id string, target proto.Target) error {
+	if !target.Valid() {
+		return fmt.Errorf("目标身份不完整")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i, current := range m.cfg.Tunnels {
+		if current.ID != id {
+			continue
+		}
+		if current.Kind != config.KindImport || current.PeerID != target.ClientID ||
+			(current.PeerFingerprint != "" && current.PeerFingerprint != target.Fingerprint) ||
+			(current.PeerTunnelID != "" && current.PeerTunnelID != target.TunnelID) {
+			return fmt.Errorf("目标身份与配置不符")
+		}
+		if current.PeerFingerprint == target.Fingerprint && current.PeerTunnelID == target.TunnelID {
+			return nil
+		}
+		m.cfg.Tunnels[i].PeerFingerprint = target.Fingerprint
+		m.cfg.Tunnels[i].PeerTunnelID = target.TunnelID
+		if err := m.cfg.Save(); err != nil {
+			m.cfg.Tunnels[i] = current
+			return err
+		}
+		return nil
+	}
+	return fmt.Errorf("导入隧道已删除或变更")
 }

@@ -21,6 +21,23 @@ func TestConfirmationForRunUsesControlAPI(t *testing.T) {
 	}
 }
 
+func TestLoginPasswordRejectsRedirectedInputWithoutReadingOrPrintingIt(t *testing.T) {
+	in, out, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer in.Close()
+	if _, err := out.WriteString("must-not-be-echoed\n"); err != nil {
+		t.Fatal(err)
+	}
+	_ = out.Close()
+	var output bytes.Buffer
+	password, err := readLoginPassword(in, &output)
+	if err == nil || len(password) != 0 || strings.Contains(output.String(), "must-not-be-echoed") {
+		t.Fatal("unsafe redirected password handling")
+	}
+}
+
 func TestRunKeygenCreatesMetadataKeyPair(t *testing.T) {
 	keyPath := filepath.Join(t.TempDir(), "client_key")
 	var out bytes.Buffer
@@ -39,7 +56,7 @@ func TestRunKeygenCreatesMetadataKeyPair(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if metadata.Username != "alice" || metadata.Email != "alice@example.com" || metadata.ComputerName == "" {
+	if metadata.Username != "alice" || metadata.Email != "alice@example.com" || metadata.ComputerName != "" {
 		t.Fatalf("metadata=%#v", metadata)
 	}
 	privateData, err := os.ReadFile(keyPath)
@@ -53,28 +70,28 @@ func TestRunKeygenCreatesMetadataKeyPair(t *testing.T) {
 	if !bytes.Equal(publicKey.Marshal(), signer.PublicKey().Marshal()) {
 		t.Fatal("public and private keys do not match")
 	}
-	for _, want := range []string{"Private key: " + keyPath, "Public key: " + keyPath + ".pub", "Fingerprint: " + ssh.FingerprintSHA256(publicKey), "Authorized key line:", strings.TrimSpace(string(publicData))} {
+	if strings.Contains(out.String(), "alice@example.com") {
+		t.Fatal("personal key comment printed to terminal")
+	}
+	for _, want := range []string{"Private key: " + keyPath, "Public key: " + keyPath + ".pub", "Fingerprint: " + ssh.FingerprintSHA256(publicKey), "Authorized key line:", strings.TrimSpace(string(ssh.MarshalAuthorizedKey(publicKey)))} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("output missing %q:\n%s", want, out.String())
 		}
 	}
 }
 
-func TestRunKeygenRequiresIdentity(t *testing.T) {
-	for _, test := range []struct {
-		name string
-		args []string
-		want string
-	}{
-		{name: "username", args: []string{"--email", "alice@example.com"}, want: "--username"},
-		{name: "email", args: []string{"--username", "alice"}, want: "--email"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			err := runKeygen(test.args, &bytes.Buffer{})
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("error=%v want substring %q", err, test.want)
-			}
-		})
+func TestRunKeygenWithoutPersonalMetadata(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "client_key")
+	if err := runKeygen([]string{"--output", path}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path + ".pub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, comment, _, _, err := ssh.ParseAuthorizedKey(data)
+	if err != nil || comment != "" {
+		t.Fatalf("unexpected personal metadata %q: %v", comment, err)
 	}
 }
 

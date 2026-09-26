@@ -5,6 +5,7 @@
       <h1 class="brand-title">TunnelX</h1>
     </div>
     <div class="header-actions">
+      <button class="account-login" type="button" :disabled="busy || corePhase !== 'running'" @click="emit('login')">账号登录</button>
       <button v-if="updateAvailable" class="update-notice" type="button" @click="emit('update')">
         <span class="update-dot" />发现新版本
       </button>
@@ -35,8 +36,8 @@
         v-if="connection.state === 'idle' || connection.state === 'failed' || connection.state === 'unknown'"
         class="icon-button icon-button-connect"
         type="button"
-        aria-label="连接"
-        title="连接"
+        aria-label="使用已登记设备连接"
+        title="使用已登记设备连接"
         :disabled="busy || corePhase !== 'running'"
         @click="emit('connect')"
       >
@@ -63,6 +64,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   connect: []
+  login: []
   disconnect: []
   settings: []
   lock: []
@@ -94,6 +96,7 @@ const isConnecting = computed(() => ['connecting', 'retrying', 'starting', 'reco
 .brand-mark { display: grid; place-items: center; width: 28px; height: 28px; flex: 0 0 auto; border-radius: 8px; color: white; font-size: 10px; font-weight: 800; letter-spacing: -.04em; background: linear-gradient(145deg, #6f8cff, #4a62dc); box-shadow: 0 4px 16px rgba(91, 124, 250, .25); }
 .brand-title { margin: 0; font-size: 16px; letter-spacing: -.02em; }
 .header-actions { display: flex; align-items: center; gap: 8px; -webkit-app-region: no-drag; }
+.account-login { padding: 6px 9px; border: 1px solid var(--line-strong); border-radius: 8px; color: #b8caff; background: #1b2b4d; font: inherit; font-size: 11px; cursor: pointer; }.account-login:disabled { opacity: .45; cursor: not-allowed; }
 .update-notice { display: inline-flex; align-items: center; gap: 7px; padding: 6px 4px; border: 0; color: #67d8f3; font: inherit; font-size: 12px; font-weight: 700; background: transparent; cursor: pointer; }
 .update-notice:hover { color: #a5efff; }
 .update-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; box-shadow: 0 0 12px currentColor; }

@@ -78,7 +78,7 @@ func (d Dialer) Dial(ctx context.Context) (*Conn, error) {
 		return nil, err
 	}
 
-	hostKey, err := hostKeyCallback(d.KnownHosts, d.Prompt)
+	hostKey, err := hostKeyCallbackContext(ctx, d.KnownHosts, d.Prompt)
 	if err != nil {
 		return nil, err
 	}
@@ -104,6 +104,8 @@ func (d Dialer) Dial(ctx context.Context) (*Conn, error) {
 		rawConn.Close()
 		return nil, err
 	}
+	stopCancellation := context.AfterFunc(ctx, func() { _ = rawConn.Close() })
+	defer stopCancellation()
 	sshConn, chans, reqs, err := ssh.NewClientConn(rawConn, d.Addr, cfg)
 	if err != nil {
 		rawConn.Close()
@@ -208,6 +210,14 @@ func (c *Conn) keepalive(log *logbuf.Buffer) {
 }
 
 func loadKey(path string) (ssh.AuthMethod, error) {
+	signer, err := loadSigner(path)
+	if err != nil {
+		return nil, err
+	}
+	return ssh.PublicKeys(signer), nil
+}
+
+func loadSigner(path string) (ssh.Signer, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("读取私钥 %s: %w", path, err)
@@ -226,5 +236,5 @@ func loadKey(path string) (ssh.AuthMethod, error) {
 		}
 		return nil, fmt.Errorf("解析私钥 %s: %w", path, err)
 	}
-	return ssh.PublicKeys(signer), nil
+	return signer, nil
 }

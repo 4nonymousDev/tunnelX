@@ -5,7 +5,7 @@
         <div><p class="eyebrow">SSH KEY</p><h2 class="dialog-title">生成专用 SSH Key</h2></div>
         <button class="dialog-close" type="button" aria-label="关闭" @click="emit('close')">×</button>
       </div>
-      <p class="hint">用户名、邮箱和本机计算机名会以明文写入 .pub 注释，供服务端导入时识别；它们不参与认证。</p>
+      <p class="hint">用户名和邮箱可留空；填写后会以明文写入公钥注释供管理员识别。程序不会自动收集计算机名，这些信息不参与认证。</p>
       <div class="field">
         <label for="key-generation-path">私钥路径</label>
         <div class="key-path-row">
@@ -23,7 +23,7 @@
         <span v-if="errors.keyPath" id="key-path-error" class="field-error" role="alert">{{ errors.keyPath }}</span>
       </div>
       <div class="field">
-        <label for="key-generation-username">用户名</label>
+        <label for="key-generation-username">用户名（可选）</label>
         <input
           id="key-generation-username"
           v-model="username"
@@ -37,7 +37,7 @@
         <span v-if="errors.username" id="username-error" class="field-error" role="alert">{{ errors.username }}</span>
       </div>
       <div class="field">
-        <label for="key-generation-email">邮箱</label>
+        <label for="key-generation-email">邮箱（可选）</label>
         <input
           id="key-generation-email"
           v-model="email"
@@ -53,7 +53,7 @@
       </div>
       <div v-if="result" class="result">
         <strong>密钥生成成功</strong>
-        <span>计算机名：{{ result.metadata.computer_name }}</span>
+        <span v-if="result.metadata.computer_name">计算机名：{{ result.metadata.computer_name }}</span>
         <span>公钥：{{ result.pub_path }}</span>
         <code>{{ result.fingerprint }}</code>
         <button class="button button-secondary" type="button" @click="emit('copy', result.public_key)">复制公钥</button>
@@ -103,8 +103,8 @@ function submit(): void {
     email: email.value.trim(),
   }
   errors.keyPath = normalized.key_path ? '' : '请选择或输入私钥路径'
-  errors.username = normalized.username ? '' : '请输入用户名'
-  errors.email = normalized.email ? '' : '请输入邮箱'
+  errors.username = ''
+  errors.email = ''
   if (normalized.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized.email)) {
     errors.email = '请输入有效的邮箱地址'
   }

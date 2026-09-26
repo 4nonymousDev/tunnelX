@@ -1,8 +1,10 @@
 package tunnel
 
 import (
+	"errors"
 	"math/rand"
 	"time"
+	"tunnelx/internal/proto"
 )
 
 // 退避参数。
@@ -63,4 +65,14 @@ func (b *Backoff) Next() time.Duration {
 // Reset returns the delay to its initial value after a successful connection.
 func (b *Backoff) Reset() {
 	b.next = BackoffInitial
+}
+
+// Pending administrator approval should recover automatically without an
+// aggressive reconnect loop or a five-minute delay after approval.
+func (b *Backoff) NextFor(err error) time.Duration {
+	var response *proto.Error
+	if errors.As(err, &response) && response.Code == proto.CodeIdentityUnverified {
+		return time.Duration(float64(20*time.Second) * (0.8 + b.rnd.Float64()*0.4))
+	}
+	return b.Next()
 }

@@ -7,6 +7,7 @@
       </div>
       <button class="button secondary" type="button" :disabled="props.api.loading.value" @click="props.api.refreshAll">刷新</button>
     </header>
+    <p v-if="props.api.overview.value && !props.api.overview.value.storage_healthy" class="panel" role="alert">审计存储需要处理：{{ props.api.overview.value.storage_status === 'commit_uncertain' ? '事务结果不确定，新连接和访问已暂停。请核对数据库并重启服务，勿直接重复操作。' : props.api.overview.value.storage_status === 'new_work_paused' ? '新连接和访问已暂停，请检查存储容量或数据库状态。' : '自动维护失败，请检查存储容量和数据库状态。' }}</p>
     <div v-if="props.api.overview.value" class="metric-grid">
       <article v-for="metric in metrics" :key="metric.label" class="metric-card">
         <span class="metric-label">{{ metric.label }}</span>

@@ -1,6 +1,7 @@
 package sshconn
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -28,6 +29,10 @@ type HostKeyPrompt func(host string, fingerprint string) bool
 // now displays the fingerprint for confirmation and records it in known_hosts; later
 // connections verify strictly and reject mismatches with a warning.
 func hostKeyCallback(knownHostsPath string, prompt HostKeyPrompt) (ssh.HostKeyCallback, error) {
+	return hostKeyCallbackContext(context.Background(), knownHostsPath, prompt)
+}
+
+func hostKeyCallbackContext(ctx context.Context, knownHostsPath string, prompt HostKeyPrompt) (ssh.HostKeyCallback, error) {
 	// knownhosts.New 在文件不存在时报错，先确保其存在。
 	// knownhosts.New rejects a missing file, so create it first.
 	if err := ensureFile(knownHostsPath); err != nil {
@@ -62,8 +67,21 @@ func hostKeyCallback(knownHostsPath string, prompt HostKeyPrompt) (ssh.HostKeyCa
 
 		// Want 为空表示主机未知，属首次连接。
 		// An empty Want means an unknown host on first connection.
-		if prompt == nil || !prompt(hostname, ssh.FingerprintSHA256(key)) {
+		if prompt == nil {
 			return tunnel.WrapHostKeyRejected(fmt.Errorf("用户拒绝信任主机 %s", hostname))
+		}
+		answer := make(chan bool, 1)
+		go func() { answer <- prompt(hostname, ssh.FingerprintSHA256(key)) }()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case accept := <-answer:
+			if !accept {
+				return tunnel.WrapHostKeyRejected(fmt.Errorf("用户拒绝信任主机 %s", hostname))
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 
 		if err := appendKnownHost(knownHostsPath, hostname, remote, key); err != nil {

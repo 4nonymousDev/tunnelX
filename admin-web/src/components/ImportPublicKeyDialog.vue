@@ -1,18 +1,21 @@
 <template>
   <div class="backdrop" role="presentation" @click.self="emit('cancel')">
     <form class="dialog import-dialog" role="dialog" aria-modal="true" aria-labelledby="import-key-title" @submit.prevent="submit">
-      <h2 id="import-key-title" class="dialog-title">导入客户端公钥</h2>
-      <p class="description">选择或粘贴 tunnel_key.pub。TunnelX 元数据会自动填入下方字段，确认后公钥立即加入授权列表。</p>
+      <h2 id="import-key-title" class="dialog-title">高级：登记原有公钥</h2>
+      <p class="description">用于维护原有设备。新设备请在账号管理中创建账号，由用户在客户端登录后自动登记。</p>
+      <label class="field"><span>设备 ID（Client ID）</span><input v-model.trim="form.client_id" maxlength="128" required placeholder="填写该设备原配置中的 ID" /><small>请使用设备交给运维的原 ID，无需修改客户端配置。</small></label>
       <label class="field"><span>选择 .pub 文件</span><input type="file" accept=".pub,text/plain" @change="readFile" /></label>
       <label class="field"><span>公钥内容</span><textarea v-model.trim="form.public_key" rows="4" required placeholder="ssh-ed25519 AAAA... tunnelx:{...}" @input="parseMetadata" /></label>
       <div class="grid">
-        <label class="field"><span>用户名</span><input v-model.trim="form.username" maxlength="128" required /></label>
-        <label class="field"><span>邮箱</span><input v-model.trim="form.email" maxlength="254" type="email" required /></label>
+        <label class="field"><span>用户名（可选）</span><input v-model.trim="form.username" maxlength="128" /></label>
+        <label class="field"><span>邮箱（可选）</span><input v-model.trim="form.email" maxlength="254" type="email" /></label>
       </div>
-      <label class="field"><span>计算机名</span><input v-model.trim="form.computer_name" maxlength="255" required /></label>
-      <label class="field"><span>导入原因（审计记录）</span><textarea v-model.trim="form.reason" rows="2" maxlength="500" required placeholder="例如：新增研发设备" /></label>
+      <label class="field"><span>计算机名（可选）</span><input v-model.trim="form.computer_name" maxlength="255" /></label>
+      <p class="description">旧设备补登记也使用此表单，提交原公钥和原 ID 即可。若该 ID 已绑定其他公钥或已撤销，请在身份查询与变更中处理。</p>
+      <label class="field"><span>登记原因（审计记录）</span><textarea v-model.trim="form.reason" rows="2" maxlength="500" required placeholder="例如：新增研发设备或补齐原设备登记" /></label>
       <p v-if="parseError" class="validation-error">{{ parseError }}</p>
-      <div class="dialog-actions"><button class="button secondary" type="button" @click="emit('cancel')">取消</button><button class="button primary" type="submit" :disabled="busy">{{ busy ? '导入中…' : '确认导入' }}</button></div>
+      <p v-if="error" class="validation-error" role="alert">{{ error }}</p>
+      <div class="dialog-actions"><button class="button secondary" type="button" @click="emit('cancel')">取消</button><button class="button primary" type="submit" :disabled="busy">{{ busy ? '登记中…' : '确认登记' }}</button></div>
     </form>
   </div>
 </template>
@@ -21,9 +24,9 @@
 import { reactive, shallowRef } from 'vue'
 import type { ImportPublicKeyRequestDto } from '../types/admin'
 
-defineProps<{ busy: boolean }>()
+const props = defineProps<{ busy: boolean; error?: string }>()
 const emit = defineEmits<{ cancel: []; submit: [payload: ImportPublicKeyRequestDto] }>()
-const form = reactive<ImportPublicKeyRequestDto>({ public_key: '', username: '', email: '', computer_name: '', reason: '' })
+const form = reactive<ImportPublicKeyRequestDto>({ client_id: '', public_key: '', username: '', email: '', computer_name: '', reason: '' })
 const parseError = shallowRef('')
 
 async function readFile(event: Event): Promise<void> {
@@ -49,7 +52,7 @@ function parseMetadata(): void {
 }
 
 function submit(): void {
-  if (parseError.value) return
+  if (parseError.value || props.busy) return
   emit('submit', { ...form })
 }
 </script>

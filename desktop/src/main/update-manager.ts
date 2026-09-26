@@ -1,18 +1,24 @@
 import { app } from 'electron'
-import { autoUpdater, type ProgressInfo, type UpdateInfo } from 'electron-updater'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
+import { autoUpdater, type NsisUpdater, type ProgressInfo, type UpdateInfo } from 'electron-updater'
 
 import type { UpdateState } from '../shared/ipc'
 import { releaseNoteAsPlainText } from '../shared/release-notes'
+import { verifyUpdateSignature } from './update-signature'
 
 const FIRST_CHECK_DELAY_MS = 15_000
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000
 
 export class UpdateManager {
+  // Unsigned developer builds remain usable, but never execute a downloaded
+  // update without the publisher configured in a signed release.
+  private readonly signedUpdates = hasPinnedPublisher()
   private state: UpdateState = {
-    phase: app.isPackaged ? 'idle' : 'unsupported',
+    phase: this.signedUpdates ? 'idle' : 'unsupported',
     currentGuiVersion: app.getVersion(),
     currentCliVersion: '未知',
-    message: app.isPackaged ? undefined : '开发模式不检查更新，请安装发布版后使用。',
+    message: this.signedUpdates ? undefined : '此构建未配置受信任的签名发布者，自动更新已禁用。',
   }
 
   private readonly listeners = new Set<(state: UpdateState) => void>()
@@ -22,6 +28,7 @@ export class UpdateManager {
   private updateReady = false
 
   constructor(private readonly prepareInstall: () => Promise<void>) {
+    if (process.platform === 'win32') (autoUpdater as NsisUpdater).verifyUpdateCodeSignature = verifyUpdateSignature
     autoUpdater.autoDownload = false
     autoUpdater.autoInstallOnAppQuit = false
     autoUpdater.allowPrerelease = false
@@ -76,7 +83,7 @@ export class UpdateManager {
   }
 
   start(): void {
-    if (!app.isPackaged) return
+    if (!app.isPackaged || !this.signedUpdates) return
     this.firstCheckTimer = setTimeout(() => void this.checkForUpdates(), FIRST_CHECK_DELAY_MS)
     this.firstCheckTimer.unref()
     this.intervalTimer = setInterval(() => void this.checkForUpdates(), CHECK_INTERVAL_MS)
@@ -107,6 +114,10 @@ export class UpdateManager {
 
   checkForUpdates(): Promise<UpdateState> {
     if (!app.isPackaged) return Promise.resolve(this.getState())
+    if (!this.signedUpdates) {
+      this.patch({ phase: 'unsupported', message: '此构建未配置受信任的签名发布者，自动更新已禁用。' })
+      return Promise.resolve(this.getState())
+    }
     if (this.state.phase === 'downloading' || this.state.phase === 'installing') {
       return Promise.resolve(this.getState())
     }
@@ -123,6 +134,7 @@ export class UpdateManager {
   }
 
   async downloadUpdate(): Promise<UpdateState> {
+    if (!this.signedUpdates) throw new Error('未配置更新签名验证，不能下载并执行更新')
     if (!app.isPackaged) return this.getState()
     if (this.updateReady) {
       this.patch({ phase: 'downloaded', percent: 100, message: '更新已下载，正在准备安装…' })
@@ -149,6 +161,7 @@ export class UpdateManager {
   }
 
   async installUpdate(): Promise<void> {
+    if (!this.signedUpdates) throw new Error('未配置更新签名验证，不能安装更新')
     if (!this.updateReady) throw new Error('更新尚未下载完成')
     this.stop()
     this.patch({ phase: 'installing', message: '正在停止核心并启动安装程序…' })
@@ -183,6 +196,17 @@ export class UpdateManager {
       }
     }
   }
+}
+
+function hasPinnedPublisher(): boolean {
+  if (!app.isPackaged || process.platform !== 'win32') return false
+  try {
+    const source = readFileSync(path.join(process.resourcesPath, 'app-update.yml'), 'utf8')
+    // electron-builder writes this field only for our explicitly configured
+    // signed release; electron-updater enforces its Authenticode publisher.
+    const publisher = source.match(/^publisherName:[ \t]*\r?\n[ \t]+-[ \t]+([^\r\n]+)\r?$/m)?.[1].trim()
+    return Boolean(publisher && !['[]', '""', "''", 'null', '~'].includes(publisher))
+  } catch { return false }
 }
 
 function releaseNotes(info: UpdateInfo): string | undefined {

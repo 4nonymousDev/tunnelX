@@ -39,7 +39,7 @@ async function startDesktop(): Promise<void> {
   updates = new UpdateManager(prepareUpdateInstall)
   const interfaceLock = new InterfaceLockManager(path.join(app.getPath('userData'), 'interface-lock.json'))
   await interfaceLock.initialize()
-  registerIpc(supervisor, updates, interfaceLock)
+  registerIpc(supervisor, updates, interfaceLock, () => mainWindow)
   supervisor.subscribe(event => {
     if (event.type === 'snapshot') {
       latestSnapshot = event.snapshot
@@ -47,12 +47,12 @@ async function startDesktop(): Promise<void> {
     }
     if (event.type === 'core-status') latestCoreStatus = event.status
     updateTrayAppearance()
-    if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow && !mainWindow.isDestroyed() && !interfaceLock.getState().locked) {
       mainWindow.webContents.send(IPC.event, event)
     }
   })
   updates.subscribe(state => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow && !mainWindow.isDestroyed() && !interfaceLock.getState().locked) {
       mainWindow.webContents.send(IPC.event, { type: 'update', state })
     }
   })
@@ -94,6 +94,7 @@ function createWindow(): void {
       sandbox: true,
       nodeIntegration: false,
       webSecurity: true,
+      devTools: !app.isPackaged,
     },
   })
 
@@ -108,7 +109,7 @@ function createWindow(): void {
   })
 
   const devUrl = process.env.VITE_DEV_SERVER_URL
-  if (devUrl) {
+  if (devUrl && !app.isPackaged) {
     const parsed = new URL(devUrl)
     if (parsed.protocol !== 'http:' || parsed.hostname !== '127.0.0.1' || parsed.port !== '5173') {
       throw new Error('VITE_DEV_SERVER_URL 必须是 http://127.0.0.1:5173')

@@ -3,12 +3,14 @@ package adminapi
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
+	"tunnelx/internal/store"
 )
 
 type fakeBackend struct {
@@ -55,7 +57,7 @@ func (f *fakeBackend) BlockClient(_ context.Context, fp string, _ BlockRequest) 
 func (f *fakeBackend) UnblockClient(context.Context, string, string) error { return nil }
 func (f *fakeBackend) ImportPublicKey(_ context.Context, request ImportPublicKeyRequest) (ImportPublicKeyResult, error) {
 	f.importRequest = request
-	return ImportPublicKeyResult{Fingerprint: "SHA256:imported"}, nil
+	return ImportPublicKeyResult{ClientID: request.ClientID, Fingerprint: "SHA256:imported"}, nil
 }
 func (f *fakeBackend) ListAuditEvents(context.Context, ListQuery) (Page[AuditEvent], error) {
 	return Page[AuditEvent]{Items: f.audit}, nil
@@ -64,16 +66,31 @@ func (f *fakeBackend) ListAuditEvents(context.Context, ListQuery) (Page[AuditEve
 func TestImportPublicKey(t *testing.T) {
 	f := &fakeBackend{}
 	s := newTestServer(t, f)
-	body := `{"public_key":"ssh-ed25519 AAAA comment","username":" alice ","email":" alice@example.com ","computer_name":" workstation ","reason":" onboarding "}`
+	body := `{"client_id":" device-original ","public_key":"ssh-ed25519 AAAA comment","username":" alice ","email":" alice@example.com ","computer_name":" workstation ","reason":" onboarding "}`
 	w := request(s, http.MethodPost, "/api/v1/clients/import-key", body, "secret", "application/json")
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), `"fingerprint":"SHA256:imported"`) {
+	if !strings.Contains(w.Body.String(), `"fingerprint":"SHA256:imported"`) || !strings.Contains(w.Body.String(), `"client_id":"device-original"`) {
 		t.Fatalf("unexpected response body: %s", w.Body.String())
 	}
-	if f.importRequest.Username != "alice" || f.importRequest.Email != "alice@example.com" || f.importRequest.ComputerName != "workstation" || f.importRequest.Reason != "onboarding" {
+	if f.importRequest.ClientID != "device-original" || f.importRequest.Username != "alice" || f.importRequest.Email != "alice@example.com" || f.importRequest.ComputerName != "workstation" || f.importRequest.Reason != "onboarding" {
 		t.Fatalf("request was not normalized: %#v", f.importRequest)
+	}
+}
+
+func TestRegisterClientRequiresValidDeviceID(t *testing.T) {
+	for _, id := range []string{"", "   ", strings.Repeat("界", 129), "device\x00id", "device\nid"} {
+		f := &fakeBackend{}
+		s := newTestServer(t, f)
+		body, err := json.Marshal(map[string]string{"client_id": id, "public_key": "ssh-ed25519 AAAA", "reason": "onboarding"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		w := request(s, http.MethodPost, "/api/v1/clients/import-key", string(body), "secret", "application/json")
+		if w.Code != http.StatusBadRequest || f.importRequest.PublicKey != "" {
+			t.Fatalf("invalid ID %q reached registration: status=%d", id, w.Code)
+		}
 	}
 }
 func (f *fakeBackend) ListAdminActions(context.Context, ListQuery) (Page[AdminAction], error) {
@@ -82,16 +99,20 @@ func (f *fakeBackend) ListAdminActions(context.Context, ListQuery) (Page[AdminAc
 
 func newTestServer(t *testing.T, f *fakeBackend) *Server {
 	t.Helper()
-	s, e := New(f, "secret")
+	s, e := New(f, &testAuthBackend{})
 	if e != nil {
 		t.Fatal(e)
 	}
 	return s
 }
-func request(s http.Handler, method, target, body, token, contentType string) *httptest.ResponseRecorder {
+func request(s http.Handler, method, target, body, sessionState, contentType string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(method, target, strings.NewReader(body))
-	if token != "" {
-		r.Header.Set("Authorization", "Bearer "+token)
+	r.Host = "127.0.0.1:2223"
+	r.Header.Set("Origin", "http://127.0.0.1:2223")
+	if sessionState == "secret" {
+		authorizeTestRequest(s.(*Server), r)
+	} else if sessionState != "" {
+		r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: sessionState})
 	}
 	if contentType != "" {
 		r.Header.Set("Content-Type", contentType)
@@ -100,6 +121,29 @@ func request(s http.Handler, method, target, body, token, contentType string) *h
 	s.ServeHTTP(w, r)
 	return w
 }
+
+func authorizeTestRequest(s *Server, r *http.Request) {
+	account, _ := s.auth.GetAccount(context.Background(), "operator")
+	id, identity, err := s.sessions.create(account, requestOrigin(r), time.Now())
+	if err != nil {
+		panic(err)
+	}
+	r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: id})
+	r.Header.Set("X-CSRF-Token", identity.CSRF)
+}
+
+type testAuthBackend struct{}
+
+func (*testAuthBackend) GetAccount(context.Context, string) (store.Account, error) {
+	return store.Account{Username: "operator", Enabled: true, IsAdmin: true, Generation: 1}, nil
+}
+func (b *testAuthBackend) AuthenticateAccount(ctx context.Context, username, password string) (store.Account, error) {
+	if username != "operator" || password != "a long test password" {
+		return store.Account{}, store.ErrAccountAuth
+	}
+	return b.GetAccount(ctx, username)
+}
+func (*testAuthBackend) RecordAdminAction(context.Context, store.AdminAction) error { return nil }
 
 func TestAuthenticationAndResponseHeaders(t *testing.T) {
 	s := newTestServer(t, &fakeBackend{})
@@ -204,7 +248,7 @@ func TestSSEPublishAndClose(t *testing.T) {
 	httpServer := httptest.NewServer(s)
 	defer httpServer.Close()
 	req, _ := http.NewRequest(http.MethodGet, httpServer.URL+"/api/v1/events", nil)
-	req.Header.Set("Authorization", "Bearer secret")
+	authorizeTestRequest(s, req)
 	resp, e := http.DefaultClient.Do(req)
 	if e != nil {
 		t.Fatal(e)

@@ -2,6 +2,7 @@ package server
 
 import (
 	"bufio"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+	"tunnelx/internal/store"
 )
 
 // TestAuthKeysHotReload 验证 authorized_keys 变更后无需重启即可生效。
@@ -82,10 +84,9 @@ func TestAuthKeysHotReload(t *testing.T) {
 	t.Log("新增与撤销均已即时生效")
 }
 
-// TestAuthKeysKeepsOldOnError 验证文件损坏时保留已加载的公钥。
-// 改坏文件不应把所有客户端挡在门外——那会让一次笔误演变成全线中断。
-// TestAuthKeysKeepsOldOnError verifies that malformed replacements preserve the last valid keys.
-func TestAuthKeysKeepsOldOnError(t *testing.T) {
+// A malformed replacement makes the active authorization state untrustworthy;
+// new authentication must fail closed until a valid file has been loaded.
+func TestAuthKeysFailsClosedOnError(t *testing.T) {
 	dir := t.TempDir()
 	authPath := filepath.Join(dir, "authorized_keys")
 
@@ -104,10 +105,10 @@ func TestAuthKeysKeepsOldOnError(t *testing.T) {
 	time.Sleep(reloadInterval + 100*time.Millisecond)
 	os.WriteFile(authPath, []byte("这不是公钥\n"), 0o600)
 
-	if !a.Authorized(signer.PublicKey()) {
-		t.Error("文件损坏后原有公钥应继续有效，而非全部失效")
+	if a.Authorized(signer.PublicKey()) {
+		t.Error("文件损坏后必须拒绝新认证，不能沿用旧授权准入")
 	}
-	t.Log("文件损坏时正确保留了原有公钥")
+	t.Log("文件损坏时关闭了新的认证准入")
 }
 
 // TestAuditLogRecordsSession 验证审计日志记录了会话与转发的关键事件。
@@ -115,98 +116,58 @@ func TestAuthKeysKeepsOldOnError(t *testing.T) {
 // 审计日志回答的是"上周三谁访问了谁"，二者不可互相替代。
 // TestAuditLogRecordsSession verifies historical session and forwarding events independently of live state.
 func TestAuditLogRecordsSession(t *testing.T) {
-	dir := t.TempDir()
-	auditPath := filepath.Join(dir, "audit.jsonl")
-
-	hostKey := filepath.Join(dir, "host_key")
-	clientKey := filepath.Join(dir, "client_key")
-	authKeys := filepath.Join(dir, "authorized_keys")
-	genPEMKey(t, hostKey)
-	pub := genPEMKey(t, clientKey)
-	os.WriteFile(authKeys, pub, 0o600)
-
-	ln, _ := net.Listen("tcp", "127.0.0.1:0")
-	addr := ln.Addr().String()
-	ln.Close()
-
-	srv, err := New(Config{
-		Addr:           addr,
-		HostKeyPath:    hostKey,
-		AuthorizedKeys: authKeys,
-		AuditPath:      auditPath,
-		Version:        "test",
-	}, func(f string, args ...any) { t.Logf("[server] "+f, args...) })
+	cfg := managementConfig(t)
+	cfg.AdminAddr, cfg.AdminTokenFile = "", ""
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("创建服务端: %v", err)
+		t.Fatal(err)
 	}
-	go srv.ListenAndServe()
-	defer srv.Close()
-
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if c, err := net.DialTimeout("tcp", addr, 200*time.Millisecond); err == nil {
-			c.Close()
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-
-	// 一次成功连接。
-	// One successful connection.
-	signer := loadSigner(t, clientKey)
-	client, err := ssh.Dial("tcp", addr, &ssh.ClientConfig{
-		User:            "tester",
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-		Timeout:         5 * time.Second,
-	})
+	cfg.Addr = probe.Addr().String()
+	probe.Close()
+	srv, err := New(cfg, nil)
 	if err != nil {
-		t.Fatalf("连接: %v", err)
+		t.Fatal(err)
 	}
+	done := make(chan error, 1)
+	go func() { done <- srv.ListenAndServe() }()
+	t.Cleanup(func() { srv.Close() })
+	keyPath := filepath.Join(filepath.Dir(cfg.HostKeyPath), "client_key")
+	client := dialWith(t, cfg.Addr, keyPath)
 	client.Close()
-
-	// 一次未授权尝试。
-	// One unauthorized attempt.
 	_, otherPriv, _ := ed25519.GenerateKey(rand.Reader)
 	otherSigner, _ := ssh.NewSignerFromKey(otherPriv)
-	ssh.Dial("tcp", addr, &ssh.ClientConfig{
-		User:            "attacker",
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(otherSigner)},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-		Timeout:         5 * time.Second,
-	})
-
-	time.Sleep(300 * time.Millisecond)
+	if rejected, err := ssh.Dial("tcp", cfg.Addr, &ssh.ClientConfig{User: "untrusted", Auth: []ssh.AuthMethod{ssh.PublicKeys(otherSigner)}, HostKeyCallback: ssh.InsecureIgnoreHostKey(), Timeout: 5 * time.Second}); err == nil {
+		rejected.Close()
+		t.Fatal("unauthorized key accepted")
+	}
+	time.Sleep(100 * time.Millisecond)
 	srv.Close()
-
-	events := readAudit(t, auditPath)
-	if len(events) == 0 {
-		t.Fatal("审计日志为空")
+	<-done
+	persisted, err := store.Open(filepath.Join(cfg.DataDir, "tunnel-server.db"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, e := range events {
-		t.Logf("审计: %+v", e)
+	defer persisted.Close()
+	events, err := persisted.ListConnections(context.Background(), store.AuditFilter{Limit: 20})
+	if err != nil || len(events) == 0 {
+		t.Fatalf("successful authentication audit missing: %+v %v", events, err)
 	}
-
-	seen := map[string]bool{}
-	for _, e := range events {
-		seen[e.Event] = true
-		if e.Time.IsZero() {
-			t.Error("审计事件缺少时间戳")
+	fp := ssh.FingerprintSHA256(loadSigner(t, keyPath).PublicKey())
+	found := false
+	for _, event := range events {
+		if event.Fingerprint == fp {
+			found = true
+		}
+		if event.AuthenticatedAt.IsZero() {
+			t.Fatal("audit time missing")
 		}
 	}
-
-	for _, want := range []string{auditConnect, auditRejected} {
-		if !seen[want] {
-			t.Errorf("审计日志中缺少 %q 事件", want)
-		}
+	if !found {
+		t.Fatal("authenticated identity absent from audit")
 	}
-
-	// 被拒事件须带指纹，否则无从判断是谁在尝试。
-	// Rejections need fingerprints to identify who attempted access.
-	for _, e := range events {
-		if e.Event == auditRejected && e.Fingerprint == "" && e.Reason == "" {
-			t.Error("被拒事件既无指纹也无原因，无法追溯")
-		}
+	rejected, _, err := persisted.TodayRejected(context.Background(), time.Now())
+	if err != nil || rejected < 1 {
+		t.Fatalf("rejection aggregate missing: %d %v", rejected, err)
 	}
 }
 

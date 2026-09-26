@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -43,8 +44,7 @@ func TestNoShellAccess(t *testing.T) {
 }
 
 // TestNoArbitraryForwardTarget 验证服务端不会沦为任意目标的跳板。
-// direct-tcpip 只允许连往 127.0.0.1；否则持有隧道密钥的人即可借服务端
-// 访问其所在内网的任意主机（open relay）。
+// v2 拒绝全部 direct-tcpip 请求；转发只允许使用完整逻辑身份的专用通道。
 // TestNoArbitraryForwardTarget proves direct-tcpip cannot turn the server into an open relay.
 func TestNoArbitraryForwardTarget(t *testing.T) {
 	client := connectTestServer(t)
@@ -76,9 +76,8 @@ func TestNoArbitraryForwardTarget(t *testing.T) {
 		t.Logf("转发到 %s 已拒绝: %v", target, err)
 	}
 
-	// 环回但未由在线 Exporter 发布的端口也必须拒绝；仅检查 loopback
-	// 会暴露管理端口、数据库及服务器上的任意本地服务。
-	// Reject unpublished loopback ports too, otherwise local admin and database services would be exposed.
+	// 环回地址也必须拒绝，不能访问服务端管理端口、数据库或其他本地服务。
+	// Reject loopback addresses too; v2 never routes through a server-local port.
 	conn, err := client.Dial("tcp", net.JoinHostPort("127.0.0.1", itoa(victimPort)))
 	if err == nil {
 		conn.Close()
@@ -113,7 +112,13 @@ func TestUnauthorizedKeyRejected(t *testing.T) {
 
 // startServer 启动测试服务端，返回地址与客户端私钥路径。
 // startServer starts a test server and returns its address and client private-key path.
-func startServer(t *testing.T) (addr, clientKeyPath string) {
+func startServer(t *testing.T, configure ...func(*Config)) (addr, clientKeyPath string) {
+	t.Helper()
+	_, addr, clientKeyPath = startServerInstance(t, configure...)
+	return addr, clientKeyPath
+}
+
+func startServerInstance(t *testing.T, configure ...func(*Config)) (_ *Server, addr, clientKeyPath string) {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -123,6 +128,14 @@ func startServer(t *testing.T) (addr, clientKeyPath string) {
 
 	genKey(t, hostKey)
 	pub := genKey(t, clientKey)
+	public, _, _, _, err := ssh.ParseAuthorizedKey(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindings := map[string]string{}
+	for _, id := range []string{"same-conn-test", "cross-exporter", "cross-importer"} {
+		bindings[id] = ssh.FingerprintSHA256(public)
+	}
 	if err := os.WriteFile(authKeys, pub, 0o600); err != nil {
 		t.Fatalf("写入 authorized_keys: %v", err)
 	}
@@ -134,12 +147,17 @@ func startServer(t *testing.T) (addr, clientKeyPath string) {
 	addr = ln.Addr().String()
 	ln.Close()
 
-	srv, err := New(Config{
-		Addr:           addr,
-		HostKeyPath:    hostKey,
-		AuthorizedKeys: authKeys,
-		Version:        "test",
-	}, func(f string, a ...any) { t.Logf("[server] "+f, a...) })
+	cfg := Config{
+		Addr:             addr,
+		HostKeyPath:      hostKey,
+		AuthorizedKeys:   authKeys,
+		Version:          "test",
+		IdentityBindings: bindings,
+	}
+	for _, configure := range configure {
+		configure(&cfg)
+	}
+	srv, err := New(cfg, func(f string, a ...any) { t.Logf("[server] "+f, a...) })
 	if err != nil {
 		t.Fatalf("创建服务端: %v", err)
 	}
@@ -149,13 +167,20 @@ func startServer(t *testing.T) (addr, clientKeyPath string) {
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if c, err := net.DialTimeout("tcp", addr, 200*time.Millisecond); err == nil {
+			// Read a banner so the probe has actually entered admission before
+			// the caller can observe its counters; a TCP dial alone only queues it.
+			_ = c.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+			var prefix [4]byte
+			_, bannerErr := io.ReadFull(c, prefix[:])
 			c.Close()
-			return addr, clientKey
+			if bannerErr == nil && string(prefix[:]) == "SSH-" {
+				return srv, addr, clientKey
+			}
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("服务端未就绪")
-	return "", ""
+	return nil, "", ""
 }
 
 func connectTestServer(t *testing.T) *ssh.Client {

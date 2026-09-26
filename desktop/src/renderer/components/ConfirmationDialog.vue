@@ -20,7 +20,7 @@
         </template>
       </dl>
       <div class="dialog-actions">
-        <button class="button button-secondary" type="button" :disabled="busy" @click="emit('answer', false)">拒绝</button>
+        <button class="button button-secondary" type="button" :disabled="busy" @click="emit('answer', false)">{{ confirmation.kind === 'key_permissions' ? '取消连接' : '拒绝' }}</button>
         <button class="button button-primary" type="button" :disabled="busy" @click="emit('answer', true)">确认</button>
       </div>
     </section>
