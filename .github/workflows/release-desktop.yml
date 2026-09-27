@@ -11,6 +11,8 @@ permissions:
 jobs:
   release:
     runs-on: windows-latest
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
     permissions:
       contents: write
     steps:
@@ -34,13 +36,17 @@ jobs:
         shell: pwsh
         run: |
           $guiVersion = (Get-Content -Raw desktop/package.json | ConvertFrom-Json).version
-          $tagVersion = ('${{ github.ref_name }}').Substring(1)
+          $tagVersion = $env:RELEASE_TAG.Substring(1)
           if ($tagVersion -ne $guiVersion) {
             throw "Tag $tagVersion does not match GUI version $guiVersion"
           }
           $cliVersion = (Get-Content -Raw CLI_VERSION).Trim()
           if ($cliVersion -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
             throw "Invalid CLI_VERSION: $cliVersion"
+          }
+          $notesPath = Join-Path '.github/release-notes' "$env:RELEASE_TAG.md"
+          if (!(Test-Path -LiteralPath $notesPath -PathType Leaf)) {
+            throw "Missing release notes: $notesPath"
           }
 
       - name: Test and build core
@@ -74,10 +80,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release view '${{ github.ref_name }}' *> $null
-          if ($LASTEXITCODE -ne 0) {
-            gh release create '${{ github.ref_name }}' --verify-tag --generate-notes --title "TunnelX ${{ github.ref_name }}"
+          $notesPath = Join-Path '.github/release-notes' "$env:RELEASE_TAG.md"
+          gh release view $env:RELEASE_TAG *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release edit $env:RELEASE_TAG --notes-file $notesPath
+          } else {
+            gh release create $env:RELEASE_TAG --verify-tag --notes-file $notesPath --title "TunnelX $env:RELEASE_TAG"
           }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Publish signed NSIS release
         working-directory: desktop
