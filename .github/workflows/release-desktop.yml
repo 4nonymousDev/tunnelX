@@ -1,4 +1,4 @@
-name: Release Windows Desktop
+name: Release Windows and Linux
 
 on:
   push:
@@ -57,6 +57,7 @@ jobs:
         shell: pwsh
         run: |
           go test ./...
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $cliVersion = (Get-Content -Raw CLI_VERSION).Trim()
           go build -trimpath -ldflags "-s -w -X main.Version=$cliVersion" -o tunnelx-cli.exe ./cmd/tunnelx-cli
 
@@ -111,3 +112,54 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: npm run package -- --publish always
+
+  release-linux:
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: '1.27.x'
+          cache: true
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: admin-web/package-lock.json
+      - name: Build and test embedded admin UI
+        working-directory: admin-web
+        run: |
+          npm ci
+          npm test
+          npm run build
+      - name: Build Linux amd64 and arm64 packages
+        run: bash .github/scripts/build-linux-release.sh "$RELEASE_TAG" "$RUNNER_TEMP/linux-release"
+      - name: Test packaged amd64 binaries
+        env:
+          TUNNELX_TEST_BIN_DIR: ${{ runner.temp }}/linux-package-test
+        run: |
+          set -euo pipefail
+          mkdir -p "$TUNNELX_TEST_BIN_DIR"
+          tar -xzf "$RUNNER_TEMP/linux-release/TunnelX-${RELEASE_TAG#v}-linux-amd64.tar.gz" -C "$TUNNELX_TEST_BIN_DIR"
+          version="$(tr -d '\r\n' < CLI_VERSION)"
+          test "$("$TUNNELX_TEST_BIN_DIR/tunnelx-cli" version)" = "$version"
+          test "$("$TUNNELX_TEST_BIN_DIR/tunnel-server" -version)" = "tunnel-server $version"
+          go test -tags=integration ./integration -v -count=1 -timeout=3m
+      - name: Upload Linux release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/linux-release"
+          sha256sum --check SHA256SUMS-linux.txt
+          gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            TunnelX-*-linux-amd64.tar.gz TunnelX-*-linux-arm64.tar.gz SHA256SUMS-linux.txt

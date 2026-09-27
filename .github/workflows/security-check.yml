@@ -26,7 +26,7 @@ jobs:
       - run: go test -race ./internal/server ./internal/session ./internal/policy ./internal/store
       - run: go vet ./...
       - run: go build -trimpath -o /tmp/tunnel-server ./cmd/tunnel-server
-      - run: bash -n deploy/install.sh deploy/upgrade.sh
+      - run: bash -n deploy/install.sh deploy/upgrade.sh .github/scripts/build-linux-release.sh
       - name: Scan reachable Go vulnerabilities
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@v1.8.0

@@ -2,6 +2,22 @@
 
 [English](README.en.md)
 
+## 下载 Linux 发布包
+
+发布工作流在推送新的 `v*` 标签后，会向同一个 GitHub Release 上传 Windows 安装包及两种 Linux 包：
+
+- `TunnelX-<发布版本>-linux-amd64.tar.gz`：x86_64 服务器。
+- `TunnelX-<发布版本>-linux-arm64.tar.gz`：aarch64 / ARM64 服务器。
+- `SHA256SUMS-linux.txt`：两个压缩包的 SHA-256 校验值。
+
+每个 Linux 包包含 `tunnel-server`（内嵌新构建的管理页面）、`tunnelx-cli`、`install.sh`、`upgrade.sh` 及文档。选择与 `uname -m` 匹配的包，解压至空目录后运行 `sudo bash install.sh --binary tunnel-server`；已有服务会走保留原参数和数据的升级流程。CLI 可直接用 `./tunnelx-cli --help` 查看命令。CLI 的配置和状态目录应放在持久目录中，升级时继续指定原 `--config` / `--state-dir`，保留原密钥。
+
+下载两个包和校验文件后，可运行 `sha256sum -c SHA256SUMS-linux.txt`；仅下载一个架构时使用 `sha256sum --ignore-missing -c SHA256SUMS-linux.txt`。压缩包名使用 Release 版本，内部 CLI/server 的核心版本来自 `CLI_VERSION`，可查看 `VERSION.txt`、`./tunnelx-cli version` 或 `./tunnel-server -version`。
+
+Linux 发布在 Windows 发布成功后执行；上传前会用打包后的 amd64 二进制运行真实连接测试，arm64 进行交叉编译。此配置对后续新标签生效，已有 Release 不会自动补包。
+
+## 安装服务
+
 将 `install.sh`、`upgrade.sh` 与对应架构的 `tunnel-server` 二进制放在同一目录后执行：
 
 ```bash
@@ -71,7 +87,7 @@ GitHub Actions 会在临时 Linux runner 中启动实际 server 和两个 CLI �
 
 本功能从 GUI/CLI 0.2.1 开始提供完整提醒。原 v2 客户端可在宽限期内连接新 server，但没有新增的提醒界面；到期同样受最低版本限制。v1 不兼容当前 server。未来如果要切换不兼容的协议，需要在仍支持旧协议的服务端上提前通知并升级客户端，然后再切换协议；宽限期不能消除协议不兼容。
 
-安装来源仍是客户端配置的发布源，不接受 server 下发的下载地址或脚本。签名发行版沿用安装包签名校验；未签名本地包、尚未发布可用更新等情况需手工安装可信新包。版本号是客户端自报信息，用于管理正常客户端的兼容性，不是对二进制完整性或漏洞已修复的证明。
+安装来源仍是客户端配置的发布源，不接受 server 下发的下载地址或脚本。桌面 0.2.4 起支持未签名发行版的应用内更新并校验下载完整性，签名发行版额外校验发布者；0.2.2 / 0.2.3 须手工覆盖升级一次。版本号是客户端自报信息，用于管理正常客户端的兼容性，不是对二进制完整性或漏洞已修复的证明。
 
 ## 已有服务升级与恢复
 

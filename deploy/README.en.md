@@ -1,5 +1,21 @@
 # One-command server deployment
 
+## Linux release downloads
+
+Pushing a new `v*` tag publishes Windows assets and two Linux archives in the same GitHub Release:
+
+- `TunnelX-<release-version>-linux-amd64.tar.gz` for x86_64.
+- `TunnelX-<release-version>-linux-arm64.tar.gz` for aarch64 / ARM64.
+- `SHA256SUMS-linux.txt` with checksums for both archives.
+
+Each Linux archive contains `tunnel-server` with a freshly built admin UI, `tunnelx-cli`, `install.sh`, `upgrade.sh` and documentation. Choose the architecture matching `uname -m`, extract into an empty directory, then run `sudo bash install.sh --binary tunnel-server`. Existing services use the upgrade path that preserves their arguments and data. Run `./tunnelx-cli --help` for CLI commands. Keep CLI configuration and state in persistent directories and reuse the original `--config` / `--state-dir` and keys when upgrading.
+
+Download both archives and the checksum file, then run `sha256sum -c SHA256SUMS-linux.txt`. When downloading only one architecture, use `sha256sum --ignore-missing -c SHA256SUMS-linux.txt`. Archive names use the Release version; the bundled CLI/server use `CLI_VERSION`. See `VERSION.txt`, `./tunnelx-cli version` or `./tunnel-server -version`.
+
+Linux publication runs after Windows publication succeeds. Packaged amd64 binaries pass a real connection test before upload; arm64 is cross-compiled. This applies to future tags and does not automatically add assets to existing releases.
+
+## Install the service
+
 Place `install.sh`, `upgrade.sh` and the `tunnel-server` binary for the target architecture
 in the same directory, then run:
 
@@ -65,7 +81,7 @@ Older clients keep working during the grace period. GUI/CLI 0.2.1 and later disp
 
 Older v2 clients lack the new reminder UI but remain usable during the grace period and are subject to server enforcement afterwards. v1 is incompatible. A future incompatible protocol change requires advance client upgrades while the server still supports the old protocol; a grace period cannot bridge incompatible protocols.
 
-The server never supplies executable update commands or download URLs. Signed desktop releases retain the existing publisher verification and configured release feed; unsigned local builds require manual installation of a trusted package. Client versions are self-reported compatibility metadata, not proof of binary integrity or vulnerability remediation.
+The server never supplies executable update commands or download URLs. Desktop 0.2.4 and later support in-app updates for unsigned releases with download integrity checks; signed builds additionally verify the publisher. Versions 0.2.2 / 0.2.3 need a one-time manual upgrade. Client versions are self-reported compatibility metadata, not proof of binary integrity or vulnerability remediation.
 
 ## Existing installations and recovery
 

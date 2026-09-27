@@ -34,6 +34,8 @@ For an existing installation, read the [upgrade instructions](deploy/README.en.m
 
 You need a Linux server with a public IP and systemd.
 
+Tagged GitHub releases build Linux amd64 / arm64 archives containing the CLI, server and deployment scripts. Download the matching architecture and follow the [Linux release instructions](deploy/README.en.md#linux-release-downloads), or compile from source below.
+
 ```bash
 # Build the embedded admin console first
 cd admin-web && npm ci && npm run typecheck && npm run build && cd ..

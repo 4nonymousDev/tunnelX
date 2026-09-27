@@ -35,6 +35,8 @@
 
 需要一台有公网 IP 的 Linux 服务器（需 systemd）。
 
+GitHub 标签发布流程会生成 Linux amd64 / arm64 包，包含 CLI、server 和部署脚本。可直接下载对应架构的发布包，按 [Linux 发布包说明](deploy/README.md#下载-linux-发布包) 安装；以下是自行编译的方法。
+
 ```bash
 # 先构建内嵌管理后台
 cd admin-web && npm ci && npm run typecheck && npm run build && cd ..
