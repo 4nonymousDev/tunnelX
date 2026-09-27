@@ -10,8 +10,6 @@ jobs:
   connection:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
-      TUNNELX_TEST_BIN_DIR: ${{ runner.temp }}/tunnelx-connection-bin
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
@@ -20,6 +18,8 @@ jobs:
           cache: true
       - name: Build Linux server and CLI
         shell: bash
+        env:
+          TUNNELX_TEST_BIN_DIR: ${{ runner.temp }}/tunnelx-connection-bin
         run: |
           set -euo pipefail
           version="$(tr -d '\r\n' < CLI_VERSION)"
@@ -27,4 +27,6 @@ jobs:
           go build -trimpath -ldflags "-X main.Version=$version" -o "$TUNNELX_TEST_BIN_DIR/tunnel-server" ./cmd/tunnel-server
           go build -trimpath -ldflags "-X main.Version=$version" -o "$TUNNELX_TEST_BIN_DIR/tunnelx-cli" ./cmd/tunnelx-cli
       - name: Connect two real CLI processes through the Linux server
+        env:
+          TUNNELX_TEST_BIN_DIR: ${{ runner.temp }}/tunnelx-connection-bin
         run: go test -tags=integration ./integration -v -count=1 -timeout=3m
