@@ -21,8 +21,8 @@ func (s *Store) GetAccount(ctx context.Context, username string) (Account, error
 
 // ProvisionAdminAccount is a local operator recovery operation. It explicitly
 // creates or promotes an account, enables it, and replaces its password. Existing
-// device ownership, quotas and creation time are preserved, but all prior
-// credentials are invalidated through a new generation.
+// creation time is preserved; prior browser sessions are invalidated through a
+// new generation. Device authorizations are independent.
 func (s *Store) ProvisionAdminAccount(ctx context.Context, username, password string, action AdminAction) (Account, error) {
 	if !ValidAccountUsername(username) || !accountauth.ValidPassword(password) {
 		return Account{}, ErrAccountInvalid

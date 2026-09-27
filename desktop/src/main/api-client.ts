@@ -1,4 +1,4 @@
-import type { CoreEventDTO, EndpointFile, LoginRequestDTO, SnapshotDTO } from '../shared/dto'
+import type { CoreEventDTO, EndpointFile, SnapshotDTO } from '../shared/dto'
 import { normalizeSnapshot, type SnapshotWireDTO } from '../shared/snapshot'
 
 const API_VERSION = 1
@@ -21,10 +21,6 @@ export class CoreApiClient {
 
   async connect(): Promise<void> {
     await this.request<void>('POST', '/v1/connect')
-  }
-
-  async login(request: LoginRequestDTO): Promise<void> {
-    await this.request<void>('POST', '/v1/login', request)
   }
 
   async disconnect(): Promise<void> {

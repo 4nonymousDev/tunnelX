@@ -15,9 +15,6 @@ func (s *Server) validateIdentity(fp, id string) error {
 	if s.store != nil {
 		ctx, cancel := s.dbContext()
 		defer cancel()
-		if err := s.store.ValidateAccountDevice(ctx, fp, id); err != nil {
-			return err
-		}
 		return s.store.ValidateIdentity(ctx, fp, id)
 	}
 	bound, ok := s.cfg.IdentityBindings[id]

@@ -142,6 +142,7 @@ for ((i=0; i<${#ARGS[@]}; i++)); do
   if [[ ${ACTUAL[i]} != "${ARGS[i]}" ]]; then systemctl stop "$SERVICE"; die "Effective arguments differ from preserved arguments. Backup: $BACKUP."; fi
 done
 printf 'Started %s. Original keys, ports and other arguments preserved. Authorization: %s. Backup: %s\n' "$VERSION" "$NEW_AUTH" "$BACKUP"
-printf '%s\n' 'Upgrade clients too. Existing business connections are interrupted by restart and then reconnect.'
-printf '%s\n' 'The console now requires an administrator account; legacy tokens no longer grant access.'
+printf '%s\n' 'Authorized v2 clients can reconnect with their existing keys. Update clients to remove the old account-login UI. Version policies still apply.'
+printf '%s\n' 'Client account enrollment has been replaced by independent device authorization. Restricted devices remain restricted. Administrator accounts and passwords are preserved.'
+printf '%s\n' 'The console still requires an administrator account; legacy tokens do not grant access.'
 printf 'To create/recover an administrator, stop %s, run as %s: %q -data-dir %q -admin-account admin, then start the service. The password is prompted securely.\n' "$SERVICE" "$RUN_USER" "$BINARY" "$DATA"

@@ -12,19 +12,15 @@ This document describes the current implementation. See [README](README.en.md) f
 | Electron desktop app | Vue interface controlling the core through restricted IPC and a local API |
 | Go server | SSH termination, authentication, online sessions, publications, and forwarding |
 | Administration console | Embedded Vue SPA and an HTTP API bound only to loopback |
-| SQLite | Accounts, device ownership, identity bindings, blocks, audit records, and administrative operation state |
+| SQLite | Administrator accounts, device authorizations, identity bindings, blocks, audit records, and administrative operation state |
 
 The server and CLI use pure Go builds. The desktop app bundles Electron and a separate Go core. Neither tunnel endpoint needs system OpenSSH; system SSH is used for operations and forwarding the administration interface to the operator's computer.
 
-## Client identity and accounts
+## Client identity and public keys
 
-An administrator creates accounts. The client verifies the server's host identity before submitting its account password over SSH. Existing private keys are preserved; a missing key is generated automatically. Passwords are not written to configuration, and subsequent connections use the local device key.
+Clients use public-key authentication only. SSH password login and the enrollment channel are removed. Administrators submit the key and device ID together; business access requires a trusted binding. Existing keys, IDs and tunnel configuration are retained.
 
-A password-authenticated connection permits only device enrollment, not a business session, shell, or arbitrary forwarding. The client signs enrollment data containing the current SSH session, account, device ID, and public key to prove possession of the private key. The server transactionally records ownership, identity, and audit information; the client then opens a normal public-key-authenticated connection.
-
-Device IDs are bound to keys. Claiming an existing identity requires its original key. Enrollment cannot overwrite another account, a conflicting key, revocation, or a block. Disabling an account, resetting its password, or changing its role advances its credential generation and invalidates older device credentials.
-
-Manually authorized keys without account ownership continue to use the authorization file and identity rules. Once owned by an account, a key cannot use that file to bypass account state. Copying a private key copies the device identity.
+Old account-device fingerprints migrate into an independent device_keys table with their original IDs and enabled state. Disabled, stale-generation, revoked or conflicting devices stay restricted and cannot fall back to an old authorized_keys entry. Blacklists remain independent. Manually registered devices use authorized_keys plus identity bindings. Administrator password changes affect only console sessions.
 
 ## v2 routing and forwarding
 
@@ -38,15 +34,15 @@ Only the v2 business protocol is implemented. Compatibility preserves keys, IDs,
 
 ## Administrator authentication
 
-The first administrator is provisioned or recovered using the local server `-admin-account` command. It reads a hidden password from a terminal and must run while the service is stopped, as the original service user with the original data directory. Ordinary and migrated accounts have no administrative privilege by default. Existing administrators can explicitly grant or revoke that privilege in the console.
+The first administrator is provisioned or recovered using the local server `-admin-account` command. It reads a hidden password from a terminal and must run while the service is stopped, as the original service user with the original data directory. Migration removes ordinary client accounts while retaining administrators. The console creates administrators and permits password resets and enabling/disabling.
 
 The console uses account passwords to establish sessions. A random credential is placed in an HttpOnly, SameSite=Strict cookie; server memory indexes sessions by a hash of that credential. Reloading the page restores login through the session endpoint. HTTPS also sets Secure. HTTP administration requests are restricted to localhost or loopback hosts and are accessed through system SSH forwarding; proxy headers do not replace origin checks.
 
-Writes require both matching origin and a CSRF credential. Every protected request checks the account's current enabled state, administrator role, and credential generation. Event streams revalidate before writing. Logout, password reset, disabling, or demotion invalidates previous access.
+Writes require both matching origin and a CSRF credential. Every protected request checks the account's current enabled state, administrator role, and credential generation. Event streams revalidate before writing. Logout, password reset, disabling invalidates previous access.
 
 Sessions last at most seven days and expire after twelve hours without management requests. An event stream alone does not extend that idle deadline. Limits are eight sessions per account and 256 globally. Restarting the server requires logging in again. Legacy management Bearer tokens no longer authenticate; their old startup option is accepted only to preserve service configuration compatibility.
 
-See the [administrator login guide](ADMIN_LOGIN_GUIDE.md) and [client account guide](ACCOUNT_LOGIN_GUIDE.md) for procedures.
+See the [administrator login guide](ADMIN_LOGIN_GUIDE.md) and [client access guide](CLIENT_ACCESS_GUIDE.md) for procedures.
 
 ## Security and resource boundaries
 
@@ -59,13 +55,13 @@ See the [administrator login guide](ADMIN_LOGIN_GUIDE.md) and [client account gu
 - Desktop locking and IPC authorization are checked in the main process; the renderer cannot directly access core credentials.
 - Desktop automatic updates require trusted code signing. Unsigned packages may be published for manual installation; unsigned builds do not perform automatic updates.
 
-Accounts govern admission. Authorized devices still share visibility and access to published tunnels. This version does not implement isolation between accounts or per-tunnel access controls; local business services should expose only the intended access scope.
+Device keys govern admission. Authorized devices still share visibility and access to published tunnels. This version does not implement isolation between devices or per-tunnel access controls; local business services should expose only the intended access scope.
 
 ## Data and upgrades
 
-Client configuration uses schema 2 and the server database uses schema 6. Migrations create backups and retain device keys, stable IDs, tunnel relationships, authorizations, and audit semantics rather than regenerating identities.
+Client configuration uses schema 2 and the server database uses schema 7. Migrations create backups and retain device keys, stable IDs, tunnel relationships, authorizations, and audit semantics rather than regenerating identities.
 
-Identity bindings, account ownership, and administrative operations awaiting reconciliation remain persistent. Ordinary audit history is maintained under retention and space budgets. Rollback must restore matching program and database versions; an old program must not open an already migrated database.
+Identity bindings, device authorization, and administrative operations awaiting reconciliation remain persistent. Ordinary audit history is maintained under retention and space budgets. Rollback must restore matching program and database versions; an old program must not open an already migrated database.
 
 The minimum-client-version policy is off by default and persists a minimum CLI version, fixed deadline and generation. Policy changes and audits commit together before refreshing the in-memory policy. Optional metadata in existing v2 handshake, registry and error messages preserves compatibility during the grace period. Handshake, publication and forwarding admission enforce the deadline; periodic checks close existing unsupported sessions. Self-reported versions do not replace identity or binary-integrity verification.
 
@@ -74,13 +70,13 @@ The minimum-client-version policy is off by default and persists a minimum CLI v
 | Path | Contents |
 |---|---|
 | [cmd/tunnel-server](cmd/tunnel-server) | Server startup, flags, and local administrator recovery |
-| [cmd/tunnelx-cli](cmd/tunnelx-cli) | CLI and client login |
+| [cmd/tunnelx-cli](cmd/tunnelx-cli) | CLI and key generation |
 | [internal/server](internal/server) | SSH admission, v2 control, forwarding, and management operations |
 | [internal/session](internal/session) | Online sessions and publications |
 | [internal/store](internal/store) | SQLite, migrations, accounts, identities, and audit |
 | [internal/adminapi](internal/adminapi) | Browser sessions, HTTP API, and embedded assets |
 | [internal/manager](internal/manager) | Client runtime and configuration management |
-| [internal/sshconn](internal/sshconn) | SSH establishment, host trust, and enrollment |
+| [internal/sshconn](internal/sshconn) | SSH establishment and host trust |
 | [desktop](desktop) | Electron main process, preload, and Vue interface |
 | [admin-web](admin-web) | Administration frontend |
 

@@ -568,7 +568,7 @@ func (m *Manager) stopTunnels() {
 // keyPath must be a resolved absolute path (see config.ResolvedKeyPath).
 func (m *Manager) checkKeyPerm(keyPath string) error {
 	if keyPath == "" {
-		return tunnel.NotConfigured("尚未配置设备凭据，请使用账号登录自动登记此设备")
+		return tunnel.NotConfigured("尚未配置设备密钥，请在连接设置中生成密钥并将公钥和设备 ID 交给管理员登记")
 	}
 
 	// 提前检查文件是否存在，给出比"读取私钥失败"更明确的提示。

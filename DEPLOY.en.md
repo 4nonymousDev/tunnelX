@@ -5,7 +5,7 @@ management REST API, and the management SPA. The tunnel endpoint listens on
 `:2222` by default; the management endpoint is forced to listen only on
 `127.0.0.1:2223`.
 
-For an existing public server, follow the [upgrade instructions](deploy/README.en.md#existing-installations-and-recovery). Account login requires updated server and client programs while retaining their keys and configuration. Already authorized v2 clients outside account management may continue under the original manual authorization rules.
+For an existing public server, follow the [upgrade instructions](deploy/README.en.md#existing-installations-and-recovery). Clients authenticate with device public keys. Administrators register the key and device ID together under **Device management → Register device**. The console retains administrator password login. Existing keys, IDs and tunnels are preserved; valid account-enrolled devices migrate to independent key authorization, while restricted devices remain restricted. See the [client access guide](CLIENT_ACCESS_GUIDE.md).
 
 ## Build
 
@@ -95,26 +95,15 @@ sudo -u tunnel /usr/local/bin/tunnel-server -data-dir /var/lib/tunnel-server -ad
 sudo systemctl start tunnel-server
 ```
 
-The password is entered privately at the terminal, never as a command-line argument. Keep the SSH forward open, browse to `http://127.0.0.1:2223`, and log in with the administrator account. An HttpOnly cookie retains login across page refreshes. Logout, server restart, session expiry, account disabling or a password reset requires login again. Sessions expire after 7 days or 12 idle hours. Existing and newly created client accounts do not automatically receive administrator privileges. Run the same local command to recover an administrator password; this also requires that account's devices to log in again. See the [admin login guide](ADMIN_LOGIN_GUIDE.md).
+The password is entered privately at the terminal, never as a command-line argument. Keep the SSH forward open, browse to `http://127.0.0.1:2223`, and log in with the administrator account. An HttpOnly cookie retains login across page refreshes. Logout, server restart, session expiry, account disabling or a password reset requires login again. Sessions expire after 7 days or 12 idle hours. Client devices do not use console accounts. The same local command recovers an administrator password without changing device authorization. See the [admin login guide](ADMIN_LOGIN_GUIDE.md).
 
-## Accounts and client access
+## Client public-key access
 
-Open **Account management (账号管理) → Create account** in the admin console. Set the username, password, device limit, and audit reason. The default device limit is 10, configurable from 1 to 50.
+Clients retain or generate a dedicated key in Connection settings. Administrators register the public key and device ID together under Device management. Verify the server fingerprint on first connection.
 
-The user selects **Account login (账号登录)** in the client, enters the server address and credentials, and verifies the first server fingerprint. The existing device key enrolls automatically; a missing key is generated. No `.pub` upload or manual device ID is needed. See the [account login guide](ACCOUNT_LOGIN_GUIDE.md).
+Existing v2 clients retain their keys, IDs and configuration. Valid account-enrolled devices migrate into independent authorizations; disabled, revoked or stale-generation devices remain restricted. Administrator password changes do not affect devices. Block, revoke or restore devices through Device management. See the [client access guide](CLIENT_ACCESS_GUIDE.md).
 
-Disabling an account or resetting its password closes all of its sessions and invalidates existing device credentials. Devices must log in with the current password again, including after re-enabling; this is distinct from ordinary outage recovery. Passwords are not stored by the client. Existing keys, IDs, tunnels, and server trust are retained.
-
-### Advanced: existing manual authorization
-
-Already authorized v2 devices outside account management retain their original public-key and identity-binding rules. **Devices and advanced management (设备与高级管理) → Existing public keys and identities** keeps manual `.pub`/original-ID registration, binding changes, and revocation. A matching active binding is retained; historical self-reported IDs are not automatically trusted.
-
-`authorized_keys` is hot-reloaded, but adding a key manually does not create its
-device ID binding. An empty file can revoke the last key; invalid contents or
-unsupported key options deny new admissions. Management-side blocking uses
-the fingerprint computed by the server and does not modify this file.
-
-After a device joins an account, a remaining `authorized_keys` entry cannot bypass account disabling, password reset, blacklisting, or device revocation.
+Manual authorized_keys edits affect only file authorization; they neither establish an identity binding nor change migrated database authorizations. Use console blocking or identity revocation to stop device access immediately.
 
 ## Operations
 
@@ -128,4 +117,4 @@ Before a backup, briefly stop the service and copy all of
 `/var/lib/tunnel-server`. Database timestamps are UTC Unix microseconds; the
 boundary for “rejected today” uses the server operating system's timezone.
 
-The current database is schema 5, including explicit administrator privileges, accounts and device ownership; client configuration remains schema 2. Recovery requires matching program and complete database backups. Version 1 clients must upgrade to v2, which routes to the exact exporter session and publication generation without relay ports. Unsupported authorization-file options or invalid contents fail closed. See the [upgrade instructions](deploy/README.en.md#existing-installations-and-recovery) and [deployment guide](deploy/README.en.md).
+The current database is schema 7, including administrator accounts and independent device authorizations; client configuration remains schema 2. Recovery requires matching program and complete database backups. Version 1 clients must upgrade to v2, which routes to the exact exporter session and publication generation without relay ports. Unsupported authorization-file options or invalid contents fail closed. See the [upgrade instructions](deploy/README.en.md#existing-installations-and-recovery) and [deployment guide](deploy/README.en.md).

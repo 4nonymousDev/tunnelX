@@ -2,7 +2,7 @@ import path from 'node:path'
 
 import { clipboard, dialog, ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from 'electron'
 
-import type { KeyGenerationRequestDTO, LoginRequestDTO, SettingsDTO, TunnelConfigDTO } from '../shared/dto'
+import type { KeyGenerationRequestDTO, SettingsDTO, TunnelConfigDTO } from '../shared/dto'
 import {
   IPC,
   type ConfirmationRequest,
@@ -26,11 +26,6 @@ export function registerIpc(supervisor: CoreSupervisor, updates: UpdateManager, 
   })
   handle(IPC.refresh, () => supervisor.refresh())
   handle(IPC.connect, () => supervisor.connect())
-  handle(IPC.login, async (_event, value: unknown) => {
-    const request = loginCredentials(value)
-    try { return await supervisor.login(request) }
-    finally { request.password = '' }
-  })
   handle(IPC.disconnect, () => supervisor.disconnect())
   handle(IPC.addTunnel, (_event, value: unknown) => supervisor.addTunnel(tunnel(value)))
   handle(IPC.addTunnels, (_event, value: unknown) => supervisor.addTunnels(tunnelBatch(value)))
@@ -80,17 +75,6 @@ export function registerIpc(supervisor: CoreSupervisor, updates: UpdateManager, 
 function lockPassword(value: unknown): string {
   if (typeof value !== 'string') throw new Error('密码格式无效')
   return value
-}
-
-function loginCredentials(value: unknown): LoginRequestDTO {
-  const input = record(value)
-  if (typeof input.username !== 'string' || !/^[a-z0-9][a-z0-9._-]{2,63}$/.test(input.username)) {
-    throw new Error('用户名需为 3–64 位小写字母、数字或 . _ -，并以字母或数字开头')
-  }
-  if (typeof input.password !== 'string' || !input.password || input.password.length > 256 || [...input.password].length > 128 || Buffer.byteLength(input.password, 'utf8') > 512) {
-    throw new Error('密码不能为空，且不能超过 128 个字符或 512 字节')
-  }
-  return { username: input.username, password: input.password }
 }
 
 function tunnelBatch(value: unknown): TunnelConfigDTO[] {

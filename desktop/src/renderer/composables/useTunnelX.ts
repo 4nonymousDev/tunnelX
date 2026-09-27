@@ -4,7 +4,6 @@ import type {
   CoreStatus,
   KeyGenerationRequestDTO,
   KeyGenerationResultDTO,
-  LoginRequestDTO,
   SettingsDTO,
   SnapshotDTO,
   TunnelConfigDTO,
@@ -71,15 +70,6 @@ export function useTunnelX() {
 
   async function connect(): Promise<void> {
     await invoke(() => bridge().connect())
-  }
-
-  async function login(request: LoginRequestDTO, settings: SettingsDTO): Promise<void> {
-    await execute(async () => {
-      try {
-        applySnapshot(await bridge().updateSettings(settings))
-        applySnapshot(await bridge().login(request))
-      } finally { request.password = '' }
-    })
   }
 
   async function disconnect(): Promise<void> {
@@ -207,7 +197,6 @@ export function useTunnelX() {
     pendingConfirmation,
     refresh,
     connect,
-    login,
     disconnect,
     addTunnel,
     addTunnels,

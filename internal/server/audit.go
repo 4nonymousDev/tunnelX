@@ -391,12 +391,10 @@ func (b *adminBackend) BindIdentity(ctx context.Context, r adminapi.BindIdentity
 	}
 	previousFingerprint := previous.Fingerprint
 	err = s.policy.PersistChanges([]string{previousFingerprint, r.Fingerprint}, func() error {
-		// Explicit administrator recovery may restore a revoked binding, but
-		// must preserve permanent account ownership. Business access separately
-		// checks account enabled state and the remembered credential generation.
-		device, lookupErr := s.store.AccountDeviceForKey(ctx, r.Fingerprint)
+		// Migrated keys retain their original identity; restoration requires explicit approval.
+		deviceID, lookupErr := s.store.DeviceKeyIdentity(ctx, r.Fingerprint)
 		if lookupErr == nil {
-			if device.ClientID != r.ClientID {
+			if deviceID != r.ClientID {
 				return adminapi.ErrConflict
 			}
 		} else if !errors.Is(lookupErr, sql.ErrNoRows) {

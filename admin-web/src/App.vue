@@ -7,12 +7,12 @@
       <label class="login-label">密码<input v-model="passwordInput" name="password" autocomplete="current-password" type="password" required :disabled="api.authBusy.value" /></label>
       <p v-if="api.error.value" class="error-banner" role="alert">{{ api.error.value }}</p><button class="button primary login-button" type="submit" :disabled="api.authBusy.value || !usernameInput.trim() || !passwordInput">{{ api.authBusy.value ? '登录中…' : '进入管理后台' }}</button>
       <p class="session-copy">登录最长保留 7 天，闲置 12 小时后需重新登录。公用电脑使用后请退出。</p>
-      <details class="setup-help"><summary>首次使用或没有管理员账号</summary><p>请在服务器上先停止服务，再使用原数据目录创建管理员：</p><code>tunnel-server -data-dir &lt;原数据目录&gt; -admin-account &lt;管理员账号&gt;</code><p>命令会安全地提示输入密码，完成后重新启动服务。普通客户端账号需要管理员授权后才能登录后台。</p></details>
+      <details class="setup-help"><summary>首次使用或没有管理员账号</summary><p>请在服务器上先停止服务，再使用原数据目录创建管理员：</p><code>tunnel-server -data-dir &lt;原数据目录&gt; -admin-account &lt;管理员账号&gt;</code><p>命令会安全地提示输入密码，完成后重新启动服务。此账号仅用于管理后台，客户端使用设备公钥连接。</p></details>
     </form>
   </main>
   <div v-else class="app-shell">
     <aside class="sidebar"><div class="brand"><span class="brand-mark small">TX</span><div><strong>TunnelX</strong><small>Server Console</small></div></div><nav class="nav"><button v-for="item in navItems" :key="item.id" type="button" :class="{ active: page === item.id }" @click="navigate(item.id)">{{ item.label }}</button></nav><div class="sidebar-footer"><span class="connection"><i :class="{ connected: api.eventsConnected.value }"></i>{{ api.eventsConnected.value ? '实时更新已连接' : '实时更新重连中' }}</span><span class="current-user">{{ api.username.value }}</span><button class="logout" type="button" :disabled="api.authBusy.value" @click="logout">{{ api.authBusy.value ? '退出中…' : '退出登录' }}</button></div></aside>
-    <section class="content"><div v-if="api.error.value" class="error-banner global">{{ api.error.value }}</div><OverviewView v-if="page === 'overview'" :api="api" /><AccountsView v-else-if="page === 'accounts'" :api="api" /><SessionsView v-else-if="page === 'sessions'" :api="api" /><ClientsView v-else-if="page === 'clients'" :api="api" @select="showClient" @accounts="navigate('accounts')" /><UpdatesView v-else-if="page === 'updates'" :api="api" /><AuditView v-else-if="page === 'audit'" :api="api" /><ClientDetailView v-else-if="page === 'client-detail' && selectedFingerprint" :api="api" :fingerprint="selectedFingerprint" @back="navigate('clients')" /></section>
+    <section class="content"><div v-if="api.error.value" class="error-banner global">{{ api.error.value }}</div><OverviewView v-if="page === 'overview'" :api="api" /><AccountsView v-else-if="page === 'accounts'" :api="api" /><SessionsView v-else-if="page === 'sessions'" :api="api" /><ClientsView v-else-if="page === 'clients'" :api="api" @select="showClient" /><UpdatesView v-else-if="page === 'updates'" :api="api" /><AuditView v-else-if="page === 'audit'" :api="api" /><ClientDetailView v-else-if="page === 'client-detail' && selectedFingerprint" :api="api" :fingerprint="selectedFingerprint" @back="navigate('clients')" /></section>
   </div>
 </template>
 
@@ -33,7 +33,7 @@ const usernameInput = shallowRef('')
 const passwordInput = shallowRef('')
 const page = shallowRef<Page>('overview')
 const selectedFingerprint = shallowRef('')
-const navItems: Array<{ id: Exclude<Page, 'client-detail'>; label: string }> = [{ id: 'overview', label: '概览' }, { id: 'accounts', label: '账号管理' }, { id: 'sessions', label: '在线会话' }, { id: 'clients', label: '设备与高级管理' }, { id: 'updates', label: '客户端更新' }, { id: 'audit', label: '审计日志' }]
+const navItems: Array<{ id: Exclude<Page, 'client-detail'>; label: string }> = [{ id: 'overview', label: '概览' }, { id: 'accounts', label: '管理员账号' }, { id: 'sessions', label: '在线会话' }, { id: 'clients', label: '设备管理' }, { id: 'updates', label: '客户端更新' }, { id: 'audit', label: '审计日志' }]
 onMounted(() => { void api.restoreSession() })
 onUnmounted(() => { passwordInput.value = '' })
 watch(api.authenticated, value => { if (!value) { page.value = 'overview'; selectedFingerprint.value = ''; passwordInput.value = '' } })

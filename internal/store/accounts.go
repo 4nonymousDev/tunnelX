@@ -13,8 +13,8 @@ import (
 var (
 	ErrAccountAuth     = errors.New("account authentication failed")
 	ErrAccountInvalid  = errors.New("invalid account parameters")
-	ErrAccountConflict = errors.New("account or device ownership changed; reload before updating")
-	ErrAccountLimit    = errors.New("account or device capacity reached")
+	ErrAccountConflict = errors.New("account changed; reload before updating")
+	ErrAccountLimit    = errors.New("account capacity reached")
 	ErrAccountBusy     = accountauth.ErrBusy
 )
 
@@ -33,7 +33,7 @@ type Account struct {
 	Enabled    bool      `json:"enabled"`
 	IsAdmin    bool      `json:"is_admin"`
 	Generation int64     `json:"generation"`
-	MaxDevices int       `json:"max_devices"`
+	MaxDevices int       `json:"-"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
 }
@@ -126,8 +126,7 @@ func (s *Store) CreateAccountWithRole(ctx context.Context, username, password st
 }
 
 // UpdateAccount increments the credential generation whenever the password or
-// enabled state changes. Device ownership is retained permanently; enrollment
-// under the new generation is required before those keys can be admitted again.
+// enabled state changes. Only administrator browser sessions are affected.
 func (s *Store) UpdateAccount(ctx context.Context, username, password string, enabled *bool, expectedGeneration int64, action AdminAction) (Account, error) {
 	return s.UpdateAccountWithRole(ctx, username, password, enabled, nil, expectedGeneration, action)
 }
@@ -190,7 +189,7 @@ func (s *Store) UpdateAccountWithRole(ctx context.Context, username, password st
 }
 
 // AuthenticateAccount uses a dummy derivation for missing accounts. Its returned
-// generation is only a snapshot; EnrollAccountDevice rechecks it atomically.
+// generation is checked again on each administrator browser request.
 func (s *Store) AuthenticateAccount(ctx context.Context, username, password string) (Account, error) {
 	if s.commitUncertain.Load() {
 		return Account{}, ErrCommitOutcomeUnknown

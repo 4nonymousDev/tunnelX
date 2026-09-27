@@ -167,30 +167,17 @@ export interface AccountDto {
   enabled: boolean
   is_admin: boolean
   generation: number
-  max_devices: number
-  created_at: string
-  updated_at: string
-}
-export interface AccountDeviceDto {
-  client_id: string
-  fingerprint: string
-  generation: number
-  active: boolean
-  name: string
   created_at: string
   updated_at: string
 }
 export interface CreateAccountRequestDto {
   username: string
   password: string
-  max_devices: number
-  is_admin?: boolean
   reason: string
 }
 export interface UpdateAccountRequestDto {
   password?: string
   enabled?: boolean
-  is_admin?: boolean
   expected_generation: number
   reason: string
 }

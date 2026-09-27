@@ -76,6 +76,17 @@ func (s *Store) ValidateIdentity(ctx context.Context, fp, id string) error {
 	if b.Fingerprint != fp {
 		return ErrIdentityMismatch
 	}
+	// A migrated authorization remains scoped to the exact enrolled device ID,
+	// even if another historical identity happens to reference the same key.
+	var originalID string
+	var enabled bool
+	err = s.db.QueryRowContext(ctx, `SELECT client_id,enabled FROM device_keys WHERE fingerprint=?`, fp).Scan(&originalID, &enabled)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if err == nil && (!enabled || originalID != id) {
+		return ErrIdentityMismatch
+	}
 	return nil
 }
 
@@ -132,6 +143,9 @@ func (s *Store) BindIdentity(ctx context.Context, id, fp string, expected int64,
 			_, err = tx.ExecContext(ctx, `UPDATE identity_bindings SET fingerprint=?,generation=generation+1,revoked=0,updated_at=? WHERE client_id=? AND generation=?`, fp, dbtime(now), id, expected)
 		}
 		if err != nil {
+			return err
+		}
+		if err = restoreDeviceKeyTx(ctx, tx, id, fp); err != nil {
 			return err
 		}
 		a.Action = "bind_identity"

@@ -58,7 +58,6 @@ type Server struct {
 	auditJobs               chan func(context.Context)
 	auditStop               chan struct{}
 	auditDone               chan struct{}
-	loginRates              loginLimiter
 	clientUpdates           atomic.Pointer[updatepolicy.Policy]
 }
 
@@ -164,9 +163,6 @@ func New(cfg Config, logf func(string, ...any)) (*Server, error) {
 		}
 		return &ssh.Permissions{Extensions: map[string]string{"pubkey-fp": fp}}, nil
 	}}
-	if s.store != nil {
-		s.sshCfg.PasswordCallback = s.authenticateAccount
-	}
 	s.sshCfg.AddHostKey(hostKey)
 	go s.runAuditJobs()
 	return s, nil
@@ -311,10 +307,6 @@ func (s *Server) handleAdmitted(raw net.Conn, finish, release func()) {
 	}
 	_ = raw.SetDeadline(time.Time{})
 	defer sshConn.Close()
-	if sshConn.Permissions.Extensions["auth-mode"] == "account-enrollment" {
-		s.serveEnrollment(raw, sshConn, chans, reqs)
-		return
-	}
 	rate := newBucket(20, 40)
 	s.mu.Lock()
 	s.requestRates[sshConn] = rate

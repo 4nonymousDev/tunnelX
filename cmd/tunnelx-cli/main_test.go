@@ -21,23 +21,6 @@ func TestConfirmationForRunUsesControlAPI(t *testing.T) {
 	}
 }
 
-func TestLoginPasswordRejectsRedirectedInputWithoutReadingOrPrintingIt(t *testing.T) {
-	in, out, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer in.Close()
-	if _, err := out.WriteString("must-not-be-echoed\n"); err != nil {
-		t.Fatal(err)
-	}
-	_ = out.Close()
-	var output bytes.Buffer
-	password, err := readLoginPassword(in, &output)
-	if err == nil || len(password) != 0 || strings.Contains(output.String(), "must-not-be-echoed") {
-		t.Fatal("unsafe redirected password handling")
-	}
-}
-
 func TestRunKeygenCreatesMetadataKeyPair(t *testing.T) {
 	keyPath := filepath.Join(t.TempDir(), "client_key")
 	var out bytes.Buffer

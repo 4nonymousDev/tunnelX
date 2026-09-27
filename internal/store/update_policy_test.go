@@ -17,12 +17,15 @@ func TestUpdatePolicyMigrationAndPersistence(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	account := createTestAccount(t, s, "preserved", 10)
-	fp := securityFingerprint("preserved-device")
-	if err = s.EnrollAccountDevice(ctx, account.Username, account.Generation, "original-id", fp, "original name", AdminAction{}); err != nil {
+	_, err = s.ProvisionAdminAccount(ctx, "preserved", accountTestPassword, AdminAction{})
+	if err != nil {
 		t.Fatal(err)
 	}
-	for _, q := range []string{`DROP TABLE client_update_policy`, `PRAGMA user_version=5`} {
+	fp := securityFingerprint("preserved-device")
+	if _, err = s.BindIdentity(ctx, "original-id", fp, 0, AdminAction{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{`DROP TABLE client_update_policy`, `DROP TABLE device_keys`, schemaV4[1], schemaV4[2], `PRAGMA user_version=5`} {
 		if _, err = s.db.Exec(q); err != nil {
 			t.Fatal(err)
 		}
@@ -45,9 +48,6 @@ func TestUpdatePolicyMigrationAndPersistence(t *testing.T) {
 		t.Fatalf("backup version=%d %v", v, err)
 	}
 	backup.Close()
-	if err = s.ValidateAccountDevice(ctx, fp, "original-id"); err != nil {
-		t.Fatal(err)
-	}
 	if err = s.ValidateIdentity(ctx, fp, "original-id"); err != nil {
 		t.Fatal(err)
 	}

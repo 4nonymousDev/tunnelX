@@ -225,19 +225,16 @@ test('login form erases its password before the request settles, preserving spac
   await pending
 })
 
-test('account role controls submit explicit privilege changes with the expected generation', () => {
-  const account = { username: 'alice', generation: 4, is_admin: false }
-  const c = componentScript('components/AccountDialog.vue', { mode: 'role', account, busy: false })
-  c.run("reason.value = 'Grant trusted operator'; submit()")
-  assert.deepEqual(JSON.parse(JSON.stringify(c.emitted)), [['update', 'alice', {
-    expected_generation: 4, reason: 'Grant trusted operator', is_admin: true,
-  }]])
-  assert.match(c.run('description.value'), /管理所有账号/)
+test('administrator form clears passwords and submits no client enrollment fields', () => {
   const create = componentScript('components/AccountDialog.vue', { mode: 'create', busy: false })
-  create.run("username.value = 'new-admin'; password.value = '  synthetic password  '; isAdmin.value = true; reason.value = 'Create trusted operator'; submit()")
+  create.run("username.value = 'new-admin'; password.value = '  synthetic password  '; reason.value = 'Create trusted operator'; submit()")
   assert.equal(create.run('password.value'), '')
-  assert.equal(create.emitted[0][1].password, '  synthetic password  ')
-  assert.equal(create.emitted[0][1].is_admin, true)
+  assert.deepEqual(JSON.parse(JSON.stringify(create.emitted)), [['create', {
+    username: 'new-admin', password: '  synthetic password  ', reason: 'Create trusted operator',
+  }]])
+  const toggle = componentScript('components/AccountDialog.vue', { mode: 'toggle', busy: false, account: { username: 'admin', enabled: true, generation: 4 } })
+  toggle.run("reason.value = 'Disable operator'; submit()")
+  assert.deepEqual(JSON.parse(JSON.stringify(toggle.emitted)), [['update', 'admin', { expected_generation: 4, reason: 'Disable operator', enabled: false }]])
 })
 
 test('policy form starts with seven days, preserves deadlines and sends a clean cancellation', async () => {

@@ -88,7 +88,7 @@ func TestServerAndCLIConnection(t *testing.T) {
 		}
 		return sshAddr != "" && adminURL != ""
 	})
-	t.Log("server is listening; authenticate administrator and create a client account")
+	t.Log("server is listening; authenticate administrator and register device public keys")
 	jar, _ := cookiejar.New(nil)
 	admin := &http.Client{Jar: jar, Timeout: 5 * time.Second}
 	var session struct {
@@ -98,8 +98,6 @@ func TestServerAndCLIConnection(t *testing.T) {
 	if session.CSRF == "" {
 		t.Fatal("admin login did not return CSRF token")
 	}
-	userPassword := randomText(t)
-	adminJSON(t, admin, adminURL, "POST", "/accounts", session.CSRF, map[string]any{"username": "ci-user", "password": userPassword, "max_devices": 2, "reason": "connection smoke test"}, nil)
 	want := randomText(t)
 	echo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, want) }))
 	defer echo.Close()
@@ -118,7 +116,16 @@ func TestServerAndCLIConnection(t *testing.T) {
 			t.Fatal(err)
 		}
 		cfgPath := filepath.Join(clientDir, "config.json")
-		cfg := config.Config{SchemaVersion: 2, ID: id, Name: id, ServerAddr: sshAddr, Tunnels: []config.Tunnel{tunnel}}
+		key, err := keygen.Generate(clientDir, "device_key", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		publicKey, err := os.ReadFile(key.PubPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		adminJSON(t, admin, adminURL, "POST", "/clients/import-key", session.CSRF, map[string]any{"client_id": id, "public_key": string(publicKey), "reason": "connection smoke test"}, nil)
+		cfg := config.Config{KeyPath: key.KeyPath, SchemaVersion: 2, ID: id, Name: id, ServerAddr: sshAddr, Tunnels: []config.Tunnel{tunnel}}
 		body, _ := json.Marshal(cfg)
 		if err := os.WriteFile(cfgPath, body, 0600); err != nil {
 			t.Fatal(err)
@@ -136,9 +143,6 @@ func TestServerAndCLIConnection(t *testing.T) {
 			_, err = client.Snapshot(ctx)
 			return err == nil
 		})
-		if err := client.Login(ctx, "ci-user", userPassword); err != nil {
-			t.Fatal(err)
-		}
 		waitFor(t, id+" authenticated connection", func() bool { s, err := client.Snapshot(ctx); return err == nil && s.Connection.State == "connected" })
 		return client, cfgPath
 	}
@@ -155,7 +159,7 @@ func TestServerAndCLIConnection(t *testing.T) {
 		return err == nil && string(body) == want
 	}
 	waitFor(t, "HTTP through both SSH clients", checkTraffic)
-	t.Log("account enrollment and end-to-end HTTP forwarding passed")
+	t.Log("public-key registration and end-to-end HTTP forwarding passed")
 	// Snapshot the already resolved identities before applying a version policy.
 	before := map[string][]byte{}
 	for _, path := range []string{exportConfig, importConfig} {

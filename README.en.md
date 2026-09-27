@@ -26,7 +26,7 @@ TunnelX is an SSH port-forwarding tool for remote development and debugging. It 
 - Importers bind a verified device, public key, and tunnel ID, checking the current session and publication generation on each connection.
 - The server provides no shell and accepts no arbitrary server-address or TCP-port forwarding.
 
-For an existing installation, read the [upgrade instructions](deploy/README.en.md#existing-installations-and-recovery). Account login requires updated server and client programs; existing keys, IDs, and tunnel configurations are retained. Already authorized v2 clients outside account management may continue under their manual authorization rules.
+For an existing installation, read the [upgrade instructions](deploy/README.en.md#existing-installations-and-recovery). Clients authenticate with device public keys. Administrators register the key and device ID together under **Device management → Register device**. The console retains administrator password login. Existing keys, IDs and tunnels are preserved; valid account-enrolled devices migrate to independent key authorization, while restricted devices remain restricted. See the [client access guide](CLIENT_ACCESS_GUIDE.md).
 
 ## Quick Start
 
@@ -56,26 +56,15 @@ ssh -L 2223:127.0.0.1:2223 user@your-server
 # Browse to http://127.0.0.1:2223
 ```
 
-### 2. An administrator creates an account
+### 2. Prepare a device key
 
-Open **Account management (账号管理) → Create account** in the admin console. Set a username, password, device limit, and audit reason. The default limit is 10 devices, configurable from 1 to 50. Give the user the server address and credentials through a trusted channel. There is no public self-registration.
+Open Connection settings and retain the existing private key, or generate one for a new device. Send the public key and the device ID shown in settings to the administrator.
 
-### 3. Log in from the client
+### 3. Register and connect
 
-Open **Account login (账号登录)** in the updated desktop client. Enter the server address, such as `your-server.com:2222`, device name, username, and password. Verify the server fingerprint when first prompted. The client enrolls the device and connects automatically: no `.pub` upload or manual device ID is needed.
+Clients authenticate with device public keys. Administrators register the key and device ID together under **Device management → Register device**. The console retains administrator password login. Existing keys, IDs and tunnels are preserved; valid account-enrolled devices migrate to independent key authorization, while restricted devices remain restricted. See the [client access guide](CLIENT_ACCESS_GUIDE.md).
 
-Existing keys, device IDs, and tunnels are retained. A missing device key is generated automatically. Passwords are used only for the current login and are not saved to configuration or logs. These are not Linux accounts. Ordinary accounts cannot use the admin console, which requires explicitly provisioned administrator privileges and retains login across refreshes. See the [admin login guide](ADMIN_LOGIN_GUIDE.md).
-
-Normal restarts and brief outages reconnect using the local device credential. Disabling an account or resetting its password closes all its sessions. Devices must enter the current password again, including after re-enabling; they do not recover automatically. See the [account login guide](ACCOUNT_LOGIN_GUIDE.md).
-
-<details>
-<summary>Advanced: existing public keys and device identities</summary>
-
-Already authorized v2 devices outside account management can continue using their original `authorized_keys` and trusted identity binding. **Devices and advanced management (设备与高级管理) → Existing public keys and identities** retains manual key registration, original-ID binding, rotation, and revocation. Adding a key to the file alone does not establish a trusted ID. Historical self-reported IDs are not automatically trusted.
-
-The authorization file reloads about every two seconds and rejects unsupported options such as `from=` and `command=`. Avoid concurrent manual edits and management imports. After an existing device logs into an account, that account controls admission; a remaining file entry cannot bypass account disabling, password reset, or device revocation. Never reuse a private key that grants system access to the server.
-
-</details>
+After registration, save settings and connect. Verify the server fingerprint on first connection. Keep private keys on the client.
 
 ### 4. Create tunnels
 
@@ -89,7 +78,7 @@ Then open `http://localhost:<your-local-port>` to reach the peer service.
 
 Desktop configuration defaults to Electron's `userData/config.json`; the CLI uses its selected configuration file. Manual editing is normally unnecessary.
 
-Client configuration remains at schema 2; the server database upgrades to schema 5. Migrations preserve existing identities, keys, and tunnels. Back up before upgrading; see the [upgrade instructions](deploy/README.en.md#existing-installations-and-recovery).
+Client configuration remains at schema 2; the server database upgrades to schema 7. Migrations preserve existing identities, keys, and tunnels. Back up before upgrading; see the [upgrade instructions](deploy/README.en.md#existing-installations-and-recovery).
 
 See [config.example.json](config.example.json) for a complete annotated example.
 
@@ -155,19 +144,11 @@ An old import without `peer_tunnel_id` is completed only when its `peer_id + pee
 
 `tunnelx-cli` is a CGO-free portable Linux client that does not depend on Debian or systemd. A static ELF for an architecture works across Debian, Ubuntu, RHEL, Fedora, Arch, Alpine, and other mainstream distributions.
 
-### Account login
+### Public-key access
 
-Configure the server address, run the core, and log in from a second terminal using the same configuration path:
+Generate a dedicated key for a new device, then give its `.pub` file and the `id` from `config.json` to the administrator. Authorized devices run with their existing configuration; no account password is required.
 
-```bash
-./tunnelx-cli run --confirm-via-api
-# In a second terminal:
-./tunnelx-cli login --username alice
-```
-
-The password is read without terminal echo and is never passed as a command-line argument. Existing device keys are reused; a missing key is generated. No `.pub` submission is required. Verify the first server fingerprint as described in the [account login guide](ACCOUNT_LOGIN_GUIDE.md).
-
-### Advanced: generate a key for manual device management
+### Generate a device key
 
 The CLI generates a tunnel-specific key without depending on the system `ssh-keygen`:
 
@@ -178,11 +159,11 @@ The CLI generates a tunnel-specific key without depending on the system `ssh-key
   --output tunnel_key
 ```
 
-`--output` defaults to `tunnel_key` in the current directory. The command never overwrites an existing private key or `.pub` file. Username and email are optional; supplied metadata is plaintext in the public-key comment, and the hostname is not collected automatically. This is an advanced manual-management tool, not a prerequisite for account login.
+`--output` defaults to `tunnel_key` in the current directory. The command never overwrites an existing private key or `.pub` file. Username and email are optional; supplied metadata is plaintext in the public-key comment, and the hostname is not collected automatically. Register the public key and device ID together in the console.
 
 ### Portable execution
 
-Configure the server address and retain existing configuration and keys. A new device can generate its key during account login:
+Configure the server address and retain existing configuration and keys. Generate and register a key before connecting a new device:
 
 ```bash
 chmod +x tunnelx-cli
@@ -266,7 +247,7 @@ tunnelx-cli commands ───┘          ▲
 
 | Document | Contents |
 |---|---|
-| [ACCOUNT_LOGIN_GUIDE.md](ACCOUNT_LOGIN_GUIDE.md) | Administrator-created accounts, automatic device enrollment, and logging in again |
+| [CLIENT_ACCESS_GUIDE.md](CLIENT_ACCESS_GUIDE.md) | Public-key registration, device migration, and preserved data |
 | [BUILD.en.md](BUILD.en.md) | Build instructions, directory layout, tests, and troubleshooting |
 | [DEPLOY.en.md](DEPLOY.en.md) | Complete deployment guide, key planning, firewall, and audit logs |
 | [deploy/README.en.md](deploy/README.en.md) | One-click installer usage |
@@ -276,12 +257,12 @@ tunnelx-cli commands ───┘          ▲
 | | TunnelX | frp / ngrok | Dev Tunnels |
 |---|---|---|---|
 | Transport | SSH | Custom protocol / HTTP | HTTPS |
-| Authentication | Account enrollment, then device public key | Token | Microsoft account |
+| Authentication | Device public key and ID binding | Token | Microsoft account |
 | Server | Self-hosted | Self-hosted / hosted | Hosted |
 | Client | Headless core + desktop/CLI front ends | CLI + configuration file | VS Code extension / CLI |
 | Dependencies | None | None | VS Code / .NET |
 
-`golang.org/x/crypto/ssh` supplies SSH transport encryption and public-key verification. Account passwords are used for restricted device enrollment; the server stores salted password hashes rather than plaintext. See the [account login guide](ACCOUNT_LOGIN_GUIDE.md).
+`golang.org/x/crypto/ssh` supplies SSH transport encryption and public-key verification. Password authentication is limited to the administration console; SSH clients use public keys only.
 
 ## System Requirements
 
@@ -297,7 +278,7 @@ tunnelx-cli commands ───┘          ▲
 
 - The server routes to an exact device, key, tunnel, session, and publication generation, without relay ports or shell access.
 - Arbitrary server-address forwarding and legacy TCP forwarding are rejected.
-- Password authentication permits device enrollment only. Business connections use device keys; old authorization-file entries cannot bypass account disabling or password resets.
+- SSH password authentication is disabled. Device public keys require administrator approval and a matching device ID; migrated keys preserve existing restrictions.
 - The management API may bind only to an explicit loopback address and requires administrator account login. An HttpOnly session cookie retains login; writes require matching origin and CSRF validation. Legacy Bearer tokens are not accepted.
 - Online client state is memory-only; profiles, blacklist entries, and new audit events use pure-Go SQLite.
 - Clients validate private-key permissions with Windows ACLs or Unix file modes.
@@ -309,4 +290,4 @@ These boundaries are enforced by `internal/server/security_test.go`; loosening t
 
 The complete path has been tested between Windows 11 and a Linux server. Core functionality is usable and details continue to be refined. Issues are welcome.
 
-Security upgrade: account login requires updated server and client programs. Existing keys, IDs, and tunnels are retained. Previously authorized v2 devices may continue under manual authorization until enrolled into an account; v1 programs must upgrade. The database is schema 5 and client configuration remains schema 2. Preserve matching program and data backups when recovering. See the [account login guide](ACCOUNT_LOGIN_GUIDE.md), [upgrade instructions](deploy/README.en.md#existing-installations-and-recovery), and [deployment guide](deploy/README.en.md).
+Clients authenticate with device public keys. Administrators register the key and device ID together under **Device management → Register device**. The console retains administrator password login. Existing keys, IDs and tunnels are preserved; valid account-enrolled devices migrate to independent key authorization, while restricted devices remain restricted. See the [client access guide](CLIENT_ACCESS_GUIDE.md). The server database is schema 7 and client configuration remains schema 2. Existing authorized v2 clients can connect directly; v1 programs must upgrade. Recovery requires matching program and database backups.

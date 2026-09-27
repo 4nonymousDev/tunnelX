@@ -19,16 +19,12 @@ func (f *accountsFake) ListAccounts(context.Context) ([]store.Account, error) {
 }
 func (f *accountsFake) CreateAccount(_ context.Context, r CreateAccountRequest) (store.Account, error) {
 	f.created = r
-	return store.Account{Username: r.Username, Enabled: true, Generation: 1, MaxDevices: r.MaxDevices}, nil
+	return store.Account{Username: r.Username, Enabled: true, Generation: 1}, nil
 }
 func (f *accountsFake) UpdateAccount(_ context.Context, name string, r UpdateAccountRequest) (store.Account, error) {
 	f.updated = r
 	return store.Account{Username: name, Generation: r.ExpectedGeneration + 1}, nil
 }
-func (f *accountsFake) ListAccountDevices(context.Context, string) ([]store.AccountDevice, error) {
-	return []store.AccountDevice{}, nil
-}
-
 func TestAccountManagementRequiresAdminAndKeepsPasswordsOutOfResponses(t *testing.T) {
 	f := &accountsFake{}
 	s, err := New(f, &testAuthBackend{})
@@ -43,7 +39,7 @@ func TestAccountManagementRequiresAdminAndKeepsPasswordsOutOfResponses(t *testin
 	}
 	body := `{"username":" Alice ","password":"  spaces are part of my password  ","reason":" administrator created "}`
 	w := request(s, "POST", "/api/v1/accounts", body, "secret", "application/json")
-	if w.Code != 201 || strings.Contains(w.Body.String(), "password") || f.created.Password != "  spaces are part of my password  " || f.created.Username != "alice" || f.created.MaxDevices != 10 || f.created.Reason != "administrator created" {
+	if w.Code != 201 || strings.Contains(w.Body.String(), "password") || f.created.Password != "  spaces are part of my password  " || f.created.Username != "alice" || f.created.Reason != "administrator created" {
 		t.Fatalf("unexpected account registration behavior: status=%d", w.Code)
 	}
 	w = request(s, "PATCH", "/api/v1/accounts/alice", `{"password":"another long password","expected_generation":1,"reason":"reset"}`, "secret", "application/json")
@@ -79,6 +75,6 @@ func TestAccountManagementRejectsAmbiguousChanges(t *testing.T) {
 		}
 	}
 	if w := request(s, "DELETE", "/api/v1/accounts/alice", "", "secret", ""); w.Code != 405 {
-		t.Fatal("account deletion would lose ownership tombstones")
+		t.Fatal("unexpected account deletion endpoint")
 	}
 }

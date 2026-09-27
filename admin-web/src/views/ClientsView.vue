@@ -1,7 +1,7 @@
 <template>
   <section class="page">
-    <header class="page-header"><div><p class="eyebrow">设备资产</p><h1 class="page-title">设备与高级管理</h1></div><div class="header-actions"><span class="count">{{ props.api.clients.value.length }} 个设备</span><button class="button primary" type="button" @click="emit('accounts')">账号管理</button></div></header>
-    <p class="muted">新设备通过账号密码登录自动登记。管理员在账号管理中创建用户，无需收集公钥文件。</p>
+    <header class="page-header"><div><p class="eyebrow">设备资产</p><h1 class="page-title">设备管理</h1></div><div class="header-actions"><span class="count">{{ props.api.clients.value.length }} 个设备</span><button class="button primary" type="button" @click="openImport">登记设备</button></div></header>
+    <p class="muted">获取客户端公钥与设备 ID，点击“登记设备”一次完成公钥授权和身份绑定。</p>
     <div class="table-wrap">
       <table class="data-table">
         <thead><tr><th>客户端</th><th>管理员备注</th><th>授权</th><th>黑名单</th><th>在线会话</th><th>最后接入</th><th></th></tr></thead>
@@ -17,7 +17,7 @@
       </table>
       <div v-if="props.api.clients.value.length === 0" class="empty">没有历史客户端记录</div>
     </div>
-    <details class="advanced-management"><summary>高级：存量公钥与身份管理</summary><p class="muted">保留原有公钥登记、身份绑定和撤销功能，供维护历史设备使用。</p><button class="button secondary" type="button" @click="openImport">手工登记原有公钥</button><IdentityManagement :api="props.api" @register="openImport" /></details>
+    <IdentityManagement :api="props.api" @register="openImport" />
     <ImportPublicKeyDialog v-if="importOpen" :busy="props.api.loading.value" :error="importError" @cancel="importOpen = false" @submit="submitImport" />
   </section>
 </template>
@@ -31,7 +31,7 @@ import IdentityManagement from '../components/IdentityManagement.vue'
 import { shallowRef } from 'vue'
 
 const props = defineProps<{ api: AdminApi }>()
-const emit = defineEmits<{ select: [fingerprint: string]; accounts: [] }>()
+const emit = defineEmits<{ select: [fingerprint: string] }>()
 const importOpen = shallowRef(false)
 const importError = shallowRef('')
 

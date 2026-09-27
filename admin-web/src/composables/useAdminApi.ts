@@ -16,7 +16,6 @@ import type {
   AdminOperationDto,
   BindIdentityRequestDto,
   AccountDto,
-  AccountDeviceDto,
   CreateAccountRequestDto,
   UpdateAccountRequestDto,
   AdminSessionDto,
@@ -126,9 +125,6 @@ export function useAdminApi() {
   async function getClientUpdatePolicy() { return request<ClientUpdatePolicyDto>('/client-update-policy') }
   async function setClientUpdatePolicy(payload: UpdatePolicyRequestDto) {
     return execute(() => request<ClientUpdatePolicyDto>('/client-update-policy', { method: 'PUT', body: JSON.stringify(payload) }))
-  }
-  async function loadAccountDevices(username: string): Promise<AccountDeviceDto[]> {
-    return listPage<AccountDeviceDto>(await request(`/accounts/${encodeURIComponent(username)}/devices`)).items
   }
   async function createAccount(payload: CreateAccountRequestDto): Promise<AccountDto> {
     const result = await execute(() => request<AccountDto>('/accounts', { method: 'POST', body: JSON.stringify(payload) }))
@@ -426,7 +422,7 @@ export function useAdminApi() {
     updateClientNote, importPublicKey, blockClient, unblockClient, exportAudit,
     identities: readonly(identities), identityClaims: readonly(identityClaims), operations: readonly(operations),
     loadGovernance, findIdentity, bindIdentity, revokeIdentity, reconcileOperation,
-    accounts: readonly(accounts), loadAccounts, loadAccountDevices, createAccount, updateAccount,
+    accounts: readonly(accounts), loadAccounts, createAccount, updateAccount,
     getClientUpdatePolicy, setClientUpdatePolicy,
   }
 }

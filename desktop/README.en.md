@@ -5,30 +5,11 @@ The Electron main process communicates with the `tunnelx-cli` core only through
 an authenticated local API. The renderer has no Node.js capabilities and
 cannot read the control token.
 
-## Account login
+## Public-key access
 
-An administrator first creates an account under **Account management → Create
-account (账号管理 → 创建账号)** in the server management page and provides the
-server address and credentials. In the desktop header, select **Account login
-(账号登录)** and enter the server address, device name, username and password.
-Verify and confirm the server fingerprint on first connection; a changed host
-key also requires separate handling.
+Clients authenticate with device public keys. Administrators register the key and device ID together under **Device management → Register device**. The console retains administrator password login. Existing keys, IDs and tunnels are preserved; valid account-enrolled devices migrate to independent key authorization, while restricted devices remain restricted. See the [client access guide](../CLIENT_ACCESS_GUIDE.md).
 
-Login automatically enrolls the device without a `.pub` upload or manual device
-ID. Existing key paths, device IDs and tunnels are preserved; a missing key is
-generated automatically. The password is used only for that login and cleared
-from the form after submission. It is never written to configuration, browser
-storage or logs. Ordinary restarts can reconnect with the enrolled device key.
-Disabling the account or resetting its password disconnects all of its sessions
-and requires password login next time; re-enabling it does not automatically
-restore those sessions.
-
-The account password is separate from the local interface-lock password.
-The main process rejects login while locked, so unlock the interface first.
-Key paths and manual key-generation tools remain under advanced settings.
-Existing authorized v2 devices can retain their manual authorization rules;
-account-enrolled devices cannot fall back to legacy file authorization. Client
-configuration remains schema 2. See the [account login guide](../ACCOUNT_LOGIN_GUIDE.md).
+Set the server address in Connection settings, retain the existing private key or generate one for a new device, then send the public key and device ID to the administrator. Verify the server fingerprint on first connection. The local interface lock remains independent; client configuration stays at schema 2.
 
 ## Architecture
 

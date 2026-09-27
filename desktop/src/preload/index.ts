@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
-import type { KeyGenerationRequestDTO, LoginRequestDTO, SettingsDTO, TunnelConfigDTO } from '../shared/dto'
+import type { KeyGenerationRequestDTO, SettingsDTO, TunnelConfigDTO } from '../shared/dto'
 import type { DesktopEvent, TunnelXDesktopAPI } from '../shared/ipc'
 
 // Sandboxed preload scripts only have Electron's limited require polyfill and
@@ -11,7 +11,6 @@ const IPC = {
   bootstrap: 'tunnelx:bootstrap',
   refresh: 'tunnelx:refresh',
   connect: 'tunnelx:connect',
-  login: 'tunnelx:login',
   disconnect: 'tunnelx:disconnect',
   addTunnel: 'tunnelx:tunnel:add',
   addTunnels: 'tunnelx:tunnel:add-batch',
@@ -36,7 +35,6 @@ const api: TunnelXDesktopAPI = {
   bootstrap: () => ipcRenderer.invoke(IPC.bootstrap),
   refresh: () => ipcRenderer.invoke(IPC.refresh),
   connect: () => ipcRenderer.invoke(IPC.connect),
-  login: (request: LoginRequestDTO) => ipcRenderer.invoke(IPC.login, request),
   disconnect: () => ipcRenderer.invoke(IPC.disconnect),
   addTunnel: (tunnel: TunnelConfigDTO) => ipcRenderer.invoke(IPC.addTunnel, tunnel),
   addTunnels: (tunnels: TunnelConfigDTO[]) => ipcRenderer.invoke(IPC.addTunnels, tunnels),

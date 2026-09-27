@@ -84,6 +84,14 @@ func (s *Store) BeginClientRegistration(ctx context.Context, clientID, fingerpri
 // registrationIdentityTx permits creation or the identical active binding.
 // Reassignment and reactivation remain separate explicit administrator actions.
 func registrationIdentityTx(ctx context.Context, tx *sql.Tx, clientID, fingerprint string) (bool, error) {
+	var originalID string
+	lookupErr := tx.QueryRowContext(ctx, `SELECT client_id FROM device_keys WHERE fingerprint=?`, fingerprint).Scan(&originalID)
+	if lookupErr != nil && !errors.Is(lookupErr, sql.ErrNoRows) {
+		return false, lookupErr
+	}
+	if lookupErr == nil && originalID != clientID {
+		return false, ErrIdentityMismatch
+	}
 	var current string
 	var revoked bool
 	err := tx.QueryRowContext(ctx, `SELECT fingerprint,revoked FROM identity_bindings WHERE client_id=?`, clientID).Scan(&current, &revoked)
@@ -153,6 +161,9 @@ func (s *Store) CompleteClientRegistration(ctx context.Context, operationID, cli
 			if _, err = tx.ExecContext(ctx, `INSERT INTO identity_bindings(client_id,fingerprint,generation,revoked,created_at,updated_at) VALUES(?,?,1,0,?,?)`, clientID, fingerprint, now, now); err != nil {
 				return err
 			}
+		}
+		if err = restoreDeviceKeyTx(ctx, tx, clientID, fingerprint); err != nil {
+			return err
 		}
 		return setAdminOperationOutcomeTx(ctx, tx, operationID, auditID, "applied", "")
 	})

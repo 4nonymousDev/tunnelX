@@ -31,7 +31,7 @@ func TestConnectRejectsMissingSettings(t *testing.T) {
 		wantSubstr string
 	}{
 		{"缺服务器地址", "", "tunnel_key", "尚未配置服务器地址"},
-		{"缺私钥路径", "1.2.3.4:2222", "", "请使用账号登录"},
+		{"缺私钥路径", "1.2.3.4:2222", "", "请在连接设置中生成密钥"},
 	}
 
 	for _, c := range cases {

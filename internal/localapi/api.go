@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"os"
@@ -166,7 +165,6 @@ func Start(service *core.Service, endpointPath string) (*Server, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/snapshot", s.auth(s.snapshot))
 	mux.HandleFunc("POST /v1/connect", s.auth(s.connect))
-	mux.HandleFunc("POST /v1/login", s.auth(s.login))
 	mux.HandleFunc("POST /v1/disconnect", s.auth(s.disconnect))
 	mux.HandleFunc("POST /v1/shutdown", s.auth(s.shutdownCore))
 	mux.HandleFunc("GET /v1/events", s.auth(s.events))
@@ -366,31 +364,6 @@ func (s *Server) connect(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-type LoginRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-}
-
-func (s *Server) login(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
-	var value LoginRequest
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&value); err != nil {
-		writeError(w, errors.New("登录请求格式无效"))
-		return
-	}
-	var extra any
-	if err := dec.Decode(&extra); err != io.EOF {
-		writeError(w, errors.New("登录请求格式无效"))
-		return
-	}
-	if err := s.service.Login(r.Context(), value.Username, value.Password); err != nil {
-		writeError(w, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
 func (s *Server) disconnect(w http.ResponseWriter, _ *http.Request) {
 	s.service.Stop()
 	w.WriteHeader(http.StatusNoContent)
@@ -646,13 +619,6 @@ func (c *Client) Snapshot(ctx context.Context) (SnapshotDTO, error) {
 }
 func (c *Client) Connect(ctx context.Context) error {
 	resp, err := c.request(ctx, http.MethodPost, "/v1/connect", nil)
-	if resp != nil {
-		resp.Body.Close()
-	}
-	return err
-}
-func (c *Client) Login(ctx context.Context, username, password string) error {
-	resp, err := c.request(ctx, http.MethodPost, "/v1/login", LoginRequest{Username: username, Password: password})
 	if resp != nil {
 		resp.Body.Close()
 	}

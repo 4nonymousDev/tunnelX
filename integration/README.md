@@ -1,8 +1,8 @@
 # Server and CLI connection test
 
-This opt-in suite starts a real `tunnel-server` and two `tunnelx-cli` processes. It verifies administrator login, account creation, automatic key enrollment, HTTP traffic through the SSH relay, update-policy grace and expiry, cancellation/reconnection, and preservation of keys and configuration.
+This opt-in suite starts a real `tunnel-server` and two `tunnelx-cli` processes. It verifies administrator login, administrator public-key registration, HTTP traffic through the SSH relay, update-policy grace and expiry, cancellation/reconnection, and preservation of keys and configuration.
 
-The fixture provisions only the initial administrator in a temporary database before the server starts. Account creation and policy changes use the authenticated admin HTTP API; client login uses the same token-protected local API as the desktop application. All listeners use loopback. No production service or existing credentials are used, and child processes are cleaned up on failure.
+The fixture provisions only the initial administrator in a temporary database before the server starts. Public-key registration and policy changes use the authenticated admin HTTP API; client connection controls use the same token-protected local API as the desktop application. All listeners use loopback. No production service or existing credentials are used, and child processes are cleaned up on failure.
 
 Run on Linux from the repository root:
 

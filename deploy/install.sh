@@ -220,7 +220,7 @@ if [[ -f "$DATA_DIR/authorized_keys" ]]; then
     ok "authorized_keys 已存在（$key_count 个公钥），保留不动"
 else
     touch "$DATA_DIR/authorized_keys"
-    warn "authorized_keys 为空；安装完成后创建管理员，再通过账号管理为客户端创建账号"
+    warn "authorized_keys 为空；安装完成后登录管理后台，在设备管理中登记客户端公钥与设备 ID"
 fi
 
 chown -R "$RUN_USER:$RUN_USER" "$CONFIG_DIR"
@@ -378,10 +378,10 @@ printf '%s云服务器还需在控制台的安全组中放行 %s/tcp%s\n\n' "$c_
 
 if [[ "$KEY_COUNT" -eq 0 ]]; then
     cat <<EOF
-${c_bold}下一步：创建客户端账号${c_off}
+${c_bold}下一步：登记客户端设备${c_off}
 
-在管理后台「账号管理」为用户创建普通账号。用户在客户端登录后自动登记设备。
-普通账号没有管理权限，原公钥和设备 ID 无需更换。
+在管理后台「设备管理 → 登记设备」一次提交客户端公钥与设备 ID。
+客户端无需账号密码，原公钥、设备 ID 和隧道配置继续使用。
 
 EOF
 fi
