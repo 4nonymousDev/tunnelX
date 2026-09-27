@@ -9,6 +9,9 @@ permissions:
   contents: read
 
 jobs:
+  linux-connection:
+    uses: ./.github/workflows/linux-connection.yml
+
   linux-server:
     runs-on: ubuntu-latest
     steps:

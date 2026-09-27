@@ -57,7 +57,7 @@ See the [administrator login guide](ADMIN_LOGIN_GUIDE.md) and [client account gu
 - Administrative audit records identify the acting account. Critical persistence failures pause admission; uncertain commits require inspection and restart.
 - Database and WAL size, audit retention, and background queues have budgets. Host resource limits are still required.
 - Desktop locking and IPC authorization are checked in the main process; the renderer cannot directly access core credentials.
-- Production desktop distribution requires code signing. Unsigned builds do not perform automatic updates.
+- Desktop automatic updates require trusted code signing. Unsigned packages may be published for manual installation; unsigned builds do not perform automatic updates.
 
 Accounts govern admission. Authorized devices still share visibility and access to published tunnels. This version does not implement isolation between accounts or per-tunnel access controls; local business services should expose only the intended access scope.
 

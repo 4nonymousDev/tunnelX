@@ -1,6 +1,6 @@
 {
   "name": "tunnelx-desktop",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "description": "TunnelX desktop frontend",
   "main": "dist-electron/main/index.js",

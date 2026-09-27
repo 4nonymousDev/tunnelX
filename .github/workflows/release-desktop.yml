@@ -9,7 +9,11 @@ permissions:
   contents: read
 
 jobs:
+  linux-connection:
+    uses: ./.github/workflows/linux-connection.yml
+
   release:
+    needs: linux-connection
     runs-on: windows-latest
     env:
       RELEASE_TAG: ${{ github.ref_name }}
@@ -61,6 +65,7 @@ jobs:
         run: npm ci
 
       - name: Require Windows signing credentials
+        if: vars.TUNNELX_SIGN_WINDOWS == 'true'
         shell: pwsh
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
@@ -90,6 +95,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Publish signed NSIS release
+        if: vars.TUNNELX_SIGN_WINDOWS == 'true'
         working-directory: desktop
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -97,3 +103,11 @@ jobs:
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           TUNNELX_PUBLISHER_NAME: ${{ vars.TUNNELX_PUBLISHER_NAME }}
         run: npm run package:signed -- --publish always
+
+      - name: Publish unsigned Windows release
+        if: vars.TUNNELX_SIGN_WINDOWS != 'true'
+        working-directory: desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npm run package -- --publish always

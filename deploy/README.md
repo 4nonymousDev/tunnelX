@@ -58,6 +58,8 @@ sudo ./install.sh --uninstall --purge  # 删除配置与数据
 
 ## 可选更新与强制更新
 
+GitHub Actions 会在临时 Linux runner 中启动实际 server 和两个 CLI 进程，检查账号登录与自动登记、端到端 HTTP 转发、宽限期、到期断开、撤销后恢复及原密钥/配置保留。所有监听都在 runner 的 loopback 上，测试不连接公网生产实例；Windows 发布以这项检查通过为前提。
+
 强制更新默认关闭。普通功能更新只需发布新版客户端，由用户选择安装。
 
 必要更新的操作顺序：

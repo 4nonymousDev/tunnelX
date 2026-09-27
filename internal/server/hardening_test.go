@@ -7,7 +7,6 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"encoding/pem"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -118,31 +117,22 @@ func TestAuthKeysFailsClosedOnError(t *testing.T) {
 func TestAuditLogRecordsSession(t *testing.T) {
 	cfg := managementConfig(t)
 	cfg.AdminAddr, cfg.AdminTokenFile = "", ""
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.Addr = probe.Addr().String()
-	probe.Close()
 	srv, err := New(cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	done := make(chan error, 1)
-	go func() { done <- srv.ListenAndServe() }()
-	t.Cleanup(func() { srv.Close() })
+	addr, stop := startTestListener(t, srv)
 	keyPath := filepath.Join(filepath.Dir(cfg.HostKeyPath), "client_key")
-	client := dialWith(t, cfg.Addr, keyPath)
+	client := dialWith(t, addr, keyPath)
 	client.Close()
 	_, otherPriv, _ := ed25519.GenerateKey(rand.Reader)
 	otherSigner, _ := ssh.NewSignerFromKey(otherPriv)
-	if rejected, err := ssh.Dial("tcp", cfg.Addr, &ssh.ClientConfig{User: "untrusted", Auth: []ssh.AuthMethod{ssh.PublicKeys(otherSigner)}, HostKeyCallback: ssh.InsecureIgnoreHostKey(), Timeout: 5 * time.Second}); err == nil {
+	if rejected, err := ssh.Dial("tcp", addr, &ssh.ClientConfig{User: "untrusted", Auth: []ssh.AuthMethod{ssh.PublicKeys(otherSigner)}, HostKeyCallback: ssh.InsecureIgnoreHostKey(), Timeout: 5 * time.Second}); err == nil {
 		rejected.Close()
 		t.Fatal("unauthorized key accepted")
 	}
 	time.Sleep(100 * time.Millisecond)
-	srv.Close()
-	<-done
+	stop()
 	persisted, err := store.Open(filepath.Join(cfg.DataDir, "tunnel-server.db"))
 	if err != nil {
 		t.Fatal(err)

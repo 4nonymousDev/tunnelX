@@ -389,21 +389,13 @@ func TestHelloTimeoutClosesAuthenticatedConnection(t *testing.T) {
 	cfg.AdminAddr = ""
 	cfg.AdminTokenFile = ""
 	cfg.HelloTimeout = 100 * time.Millisecond
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.Addr = probe.Addr().String()
-	_ = probe.Close()
 	s, err := New(cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	serveDone := make(chan error, 1)
-	go func() { serveDone <- s.ListenAndServe() }()
-	t.Cleanup(func() { _ = s.Close(); <-serveDone })
+	addr, _ := startTestListener(t, s)
 
-	client := dialWith(t, cfg.Addr, filepath.Join(filepath.Dir(cfg.HostKeyPath), "client_key"))
+	client := dialWith(t, addr, filepath.Join(filepath.Dir(cfg.HostKeyPath), "client_key"))
 	waitDone := make(chan error, 1)
 	go func() { waitDone <- client.Wait() }()
 	select {
@@ -416,12 +408,6 @@ func TestHelloTimeoutClosesAuthenticatedConnection(t *testing.T) {
 func TestMixedRolePublishAndCancelUpdatesRegistry(t *testing.T) {
 	cfg := managementConfig(t)
 	cfg.AdminAddr, cfg.AdminTokenFile = "", ""
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.Addr = probe.Addr().String()
-	probe.Close()
 	s, err := New(cfg, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -431,10 +417,8 @@ func TestMixedRolePublishAndCancelUpdatesRegistry(t *testing.T) {
 	if _, err = s.store.BindIdentity(context.Background(), "mixed-role", fp, 0, store.AdminAction{Operator: "test-admin", Reason: "preverified device"}); err != nil {
 		t.Fatal(err)
 	}
-	done := make(chan error, 1)
-	go func() { done <- s.ListenAndServe() }()
-	t.Cleanup(func() { s.Close(); <-done })
-	client := dialWith(t, cfg.Addr, keyPath)
+	addr, _ := startTestListener(t, s)
+	client := dialWith(t, addr, keyPath)
 	pc, channel := openTestControl(t, client, proto.RoleImporter, "mixed-role")
 	defer channel.Close()
 	ack := publishManagementTunnels(t, pc, []proto.TunnelSpec{{TunnelID: "test", SrcHost: "127.0.0.1", SrcPort: 8080, Name: "mixed export"}})

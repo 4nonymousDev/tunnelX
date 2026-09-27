@@ -63,7 +63,7 @@ GUI 与 CLI 使用独立的 [SemVer](https://semver.org/lang/zh-CN/) 版本号�
 - CLI 版本来自仓库根目录 `CLI_VERSION`，发布构建会把它注入 `tunnelx-cli.exe`。
 - 只修改 GUI 时只提升 GUI 版本；修改 CLI 时提升 CLI 版本，并至少提升 GUI 的补丁版本，因为桌面安装包是 CLI 更新的载体。
 
-仓库中的 `.github/workflows/release-desktop.yml` 负责在干净的 Windows runner 中测试、构建并发布签名的 NSIS 安装版和 ZIP 便携版。创建标签前先同步版本，然后推送标签：
+仓库中的 `.github/workflows/release-desktop.yml` 先执行 Linux 实际连接测试，再在干净的 Windows runner 中测试、构建并发布 NSIS 安装版和 ZIP 便携版。目前默认发布未签名包，自动更新保持禁用。创建标签前先同步版本、编写 `.github/release-notes/v<版本>.md`，然后推送标签：
 
 ```powershell
 # 示例：GUI 0.1.1，CLI 仍为 0.1.0
@@ -74,7 +74,7 @@ git tag v0.1.1
 git push origin HEAD --tags
 ```
 
-发布前需要在仓库 Secrets 中设置代码签名证书 `CSC_LINK`、密码 `CSC_KEY_PASSWORD`，并在 Variables 中设置与证书 Subject 完全一致的 `TUNNELX_PUBLISHER_NAME`。工作流通过 `npm run package:signed` 强制签名；缺少配置时停止发布，不会生成冒充已签名的发行版。`GITHUB_TOKEN` 仍用于写入 Releases。证书未提供时可以用 `npm run package -- --publish never` 生成本地未签名测试包；这类构建禁用自动更新，用户可手动替换程序并保留 userData。现有未签名旧版首次迁移到签名版本也应手工安装经核验的新包。
+当前无证书时，工作流使用 `npm run package -- --publish always` 发布未签名包，用户手工安装并保留 userData。以后启用签名时，在仓库 Variables 中设置 `TUNNELX_SIGN_WINDOWS=true` 和与证书 Subject 完全一致的 `TUNNELX_PUBLISHER_NAME`，并在 Secrets 中设置 `CSC_LINK`、`CSC_KEY_PASSWORD`。启用签名后，工作流通过 `npm run package:signed` 强制签名；缺少配置会停止发布。`GITHUB_TOKEN` 用于写入 Releases。现有未签名版本首次迁移到签名版本也应手工安装经核验的新包。
 
 签名版将发布者固定在更新配置中，主进程给 electron-updater 注册的验证器要求 Windows Authenticode 状态为 Valid 且证书完整 Subject 完全匹配；PowerShell 不可用、解析失败或签名无效都会拒绝更新。此仓库不包含证书；配置检查不等于已完成真实签名验证，首次正式发布仍需使用实际证书构建并验证签名。
 
