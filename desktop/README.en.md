@@ -77,7 +77,7 @@ The GUI and CLI have independent [SemVer](https://semver.org/) versions:
 - The CLI version is the root `CLI_VERSION`, injected into `tunnelx-cli.exe` by the release build.
 - GUI-only changes bump only the GUI version. CLI changes bump the CLI version and at least the GUI patch version because the desktop installer carries the CLI update.
 
-`.github/workflows/release-desktop.yml` tests, builds, and publishes a signed NSIS installer and portable ZIP on a clean Windows runner. Update the versions before pushing a tag:
+`.github/workflows/release-desktop.yml` runs the Linux connection test, then tests, builds and publishes an NSIS installer and portable ZIP on a clean Windows runner. Packages are unsigned by default; GUI 0.2.4 and later support checking, downloading and installing updates in-app. Update the versions and write `.github/release-notes/v<version>.md` before pushing a tag:
 
 ```powershell
 npm --prefix desktop version 0.1.1 --no-git-tag-version
@@ -87,7 +87,9 @@ git tag v0.1.1
 git push origin HEAD --tags
 ```
 
-Before publishing, configure the `CSC_LINK` certificate and `CSC_KEY_PASSWORD` repository secrets, plus the `TUNNELX_PUBLISHER_NAME` repository variable matching the certificate Subject exactly. The workflow runs `npm run package:signed` and refuses publishing without these inputs. `GITHUB_TOKEN` is used to write Releases. Without a certificate, `npm run package -- --publish never` can create a local unsigned test package; automatic updates are disabled in those builds. Replace the program manually while preserving userData. Existing unsigned releases should also migrate to the first verified signed build through manual installation.
+Without a certificate, the workflow publishes unsigned packages using `npm run package -- --publish always`, without requiring Authenticode. Updates come from this repository's GitHub Releases over HTTPS and electron-updater checks SHA-512 against release metadata. These hashes check download integrity, not publisher identity. Downloading and installation require user confirmation. **Versions 0.2.2 / 0.2.3 have updates disabled in their installed code and need a one-time manual installation of 0.2.4**, preserving userData. Subsequent updates can be installed in-app.
+
+To enable signing later, set the repository variables `TUNNELX_SIGN_WINDOWS=true` and `TUNNELX_PUBLISHER_NAME` (matching the certificate Subject exactly), plus the `CSC_LINK` and `CSC_KEY_PASSWORD` secrets. The workflow then uses `npm run package:signed`, requires these inputs and enables publisher verification. `GITHUB_TOKEN` is used to write Releases.
 
 Signed builds pin the publisher in their update configuration. The main process registers an electron-updater verifier requiring Valid Windows Authenticode status and an exact match of the complete certificate Subject. Unavailable PowerShell, parsing failures and invalid signatures reject the update. No certificate is included in this repository. Configuration validation does not constitute real signature validation: the first signed release still needs an actual certificate and verification of its output.
 

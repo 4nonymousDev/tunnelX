@@ -53,7 +53,7 @@ See the [administrator login guide](ADMIN_LOGIN_GUIDE.md) and [client access gui
 - Administrative audit records identify the acting account. Critical persistence failures pause admission; uncertain commits require inspection and restart.
 - Database and WAL size, audit retention, and background queues have budgets. Host resource limits are still required.
 - Desktop locking and IPC authorization are checked in the main process; the renderer cannot directly access core credentials.
-- Desktop automatic updates require trusted code signing. Unsigned packages may be published for manual installation; unsigned builds do not perform automatic updates.
+- Windows releases support in-app updates for unsigned packages after user confirmation, retaining download hash checks. Builds with a configured signing publisher also verify Authenticode. Versions 0.2.2 / 0.2.3 need a one-time manual upgrade to 0.2.4.
 
 Device keys govern admission. Authorized devices still share visibility and access to published tunnels. This version does not implement isolation between devices or per-tunnel access controls; local business services should expose only the intended access scope.
 

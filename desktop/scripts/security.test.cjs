@@ -7,7 +7,7 @@ const { InterfaceLockManager } = require('../dist-electron/main/lock-manager')
 const Module = require('node:module')
 const { validateSignatureResult, verifyUpdateSignature } = require('../dist-electron/main/update-signature')
 
-test('updates require a valid signature from the complete pinned publisher', async () => {
+test('signed builds require a valid signature from the complete pinned publisher', async () => {
   const trusted = ['CN=TunnelX Test, O=Example']
   assert.equal(validateSignatureResult(trusted, { Status: 0, Subject: trusted[0] }), null)
   assert.ok(validateSignatureResult(trusted, { Status: 1, Subject: trusted[0] }))
