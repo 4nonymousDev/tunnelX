@@ -85,6 +85,26 @@ func TestSSESubscriberCapReturnsCapacityAfterCancellation(t *testing.T) {
 	}
 }
 
+func TestIdentityReplacementAcceptsPublicKeyAndRequiresExistingGeneration(t *testing.T) {
+	f := &governanceFake{}
+	s, err := New(f, &testAuthBackend{})
+	if err != nil { t.Fatal(err) }
+	defer s.Close()
+	body := `{"client_id":"same-device","public_key":"ssh-ed25519 test-key","expected_generation":1,"reason":"replace lost key"}`
+	if w := request(s, "POST", "/api/v1/identities", body, "secret", "application/json"); w.Code != 200 {
+		t.Fatalf("replacement: %d %s", w.Code, w.Body.String())
+	}
+	if f.bound.PublicKey != "ssh-ed25519 test-key" || f.bound.Fingerprint != "" || f.bound.ExpectedGeneration != 1 { t.Fatalf("request lost fields: %+v", f.bound) }
+	for _, invalid := range []string{
+		strings.Replace(body, `"expected_generation":1`, `"expected_generation":0`, 1),
+		strings.Replace(body, "ssh-ed25519 test-key", "", 1),
+		strings.Replace(body, "ssh-ed25519 test-key", strings.Repeat("x", 16385), 1),
+		strings.Replace(body, `"public_key":`, `"fingerprint":"invalid","public_key":`, 1),
+	} {
+		if w := request(s, "POST", "/api/v1/identities", invalid, "secret", "application/json"); w.Code != 400 { t.Fatalf("invalid replacement: %d %s", w.Code, w.Body.String()) }
+	}
+}
+
 func TestPendingSideEffectReturnsAcceptedNotFalseFailure(t *testing.T) {
 	w := request(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeBackendError(w, "rid", &PendingOperationError{ID: "known-op"})

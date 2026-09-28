@@ -58,6 +58,7 @@
     },
     "nsis": {
       "oneClick": false,
+      "deleteAppDataOnUninstall": false,
       "allowToChangeInstallationDirectory": true
     },
     "publish": [

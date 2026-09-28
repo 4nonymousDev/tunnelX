@@ -11,8 +11,10 @@
       <p v-if="lookedUpId === form.client_id && !existing">此 ID 尚未登记。请使用<button class="link-button" type="button" @click="emit('register')">登记客户端</button>提交公钥和 ID。</p>
       <template v-if="existing && lookedUpId === form.client_id">
       <p>当前登记：<code>{{ existing.fingerprint }}</code> · {{ existing.revoked ? '已撤销' : '有效' }}</p>
-      <label>已授权公钥的完整 SHA256 指纹<input v-model.trim="form.fingerprint" maxlength="50" required placeholder="SHA256:…" @input="verified = false" /></label>
-      <p>更换为新公钥时，新公钥须先由管理员加入授权列表。</p>
+      <label>变更方式<select v-model="keyMode" @change="verified = false"><option value="public_key">更换为新公钥</option><option value="fingerprint">使用已授权指纹 / 恢复原身份</option></select></label>
+      <label v-if="keyMode === 'public_key'">新公钥内容<textarea v-model.trim="publicKey" rows="4" maxlength="16384" required placeholder="粘贴新 .pub 文件的完整内容，例如 ssh-ed25519 AAAA…" @input="verified = false" /></label>
+      <label v-else>已授权公钥的完整 SHA256 指纹<input v-model.trim="form.fingerprint" maxlength="50" required placeholder="SHA256:…" @input="verified = false" /></label>
+      <p v-if="keyMode === 'public_key'">提交后将授权新公钥并替换此设备 ID 的绑定，无需先登记新设备。旧公钥将无法再使用此 ID 连接。</p>
       <label>变更原因<input v-model.trim="form.reason" maxlength="500" required /></label>
       <label class="verify"><input v-model="verified" type="checkbox" required :disabled="lookupBusy" />我已核对设备配置和公钥文件，确认变更此 ID 对应的公钥或恢复已撤销的身份</label>
       <p class="warning">提交将更新第 {{ existing.generation }} 版登记并断开相关现有连接；已撤销的身份将恢复有效。</p>
@@ -65,6 +67,8 @@ const props = defineProps<{ api: AdminApi }>()
 const emit = defineEmits<{ register: [] }>()
 const changePanel = shallowRef<HTMLDetailsElement | null>(null)
 const form = reactive({ client_id: '', fingerprint: '', reason: '' })
+const keyMode = shallowRef<'public_key' | 'fingerprint'>('public_key')
+const publicKey = shallowRef('')
 const verified = shallowRef(false)
 const revoke = shallowRef<IdentityBindingDto | null>(null)
 const reconcile = shallowRef('')
@@ -73,12 +77,14 @@ const lookedUpIdentity = shallowRef<IdentityBindingDto | null>(null)
 const lookupBusy = shallowRef(false)
 const lookupError = shallowRef('')
 const existing = computed(() => lookedUpId.value === form.client_id ? lookedUpIdentity.value : null)
-watch(() => [form.client_id, form.fingerprint, existing.value?.generation], () => { verified.value = false })
+watch(() => [form.client_id, form.fingerprint, publicKey.value, keyMode.value, existing.value?.generation], () => { verified.value = false })
 const unresolved = computed(() => props.api.operations.value.filter(item => item.state === 'pending' || item.state === 'needs_reconcile'))
 function select(id: string, fingerprint: string) {
   form.client_id = id
   form.fingerprint = fingerprint
   form.reason = ''
+  publicKey.value = ''
+  keyMode.value = 'public_key'
   verified.value = false
   if (changePanel.value) changePanel.value.open = true
   void lookup()
@@ -91,13 +97,26 @@ async function lookup() {
   lookupBusy.value = true
   try {
     const binding = await props.api.findIdentity(id)
-    if (form.client_id === id) { lookedUpIdentity.value = binding; lookedUpId.value = id }
+    if (form.client_id === id) {
+      lookedUpIdentity.value = binding
+      lookedUpId.value = id
+      form.fingerprint = binding?.fingerprint ?? ''
+      publicKey.value = ''
+      keyMode.value = binding?.revoked ? 'fingerprint' : 'public_key'
+    }
   } catch (cause) { lookupError.value = cause instanceof Error ? cause.message : '查询失败' }
   finally { lookupBusy.value = false }
 }
 async function bind() {
-  if (!verified.value || lookedUpId.value !== form.client_id || !existing.value) return
-  try { await props.api.bindIdentity({ ...form, expected_generation: existing.value.generation }); verified.value = false; form.reason = ''; lookedUpId.value = '' } catch { /* shared error banner */ }
+  if (!verified.value || lookupBusy.value || props.api.loading.value || lookedUpId.value !== form.client_id || !existing.value) return
+  if (keyMode.value === 'public_key' && !publicKey.value) return
+  try {
+    await props.api.bindIdentity({ ...form, fingerprint: keyMode.value === 'fingerprint' ? form.fingerprint : '', public_key: keyMode.value === 'public_key' ? publicKey.value : undefined, expected_generation: existing.value.generation })
+    verified.value = false
+    publicKey.value = ''
+    form.reason = ''
+    lookedUpId.value = ''
+  } catch { /* shared error banner */ }
 }
 async function confirmRevoke(reason: string) {
   if (!revoke.value) return

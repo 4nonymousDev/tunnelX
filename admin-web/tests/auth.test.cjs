@@ -254,3 +254,40 @@ test('policy form starts with seven days, preserves deadlines and sends a clean 
   await c.run('save()')
   assert.deepEqual(saved[1], { minimum_version: '', enforce_after: null, message: '', expected_generation: 2, reason: 'Cancel update' })
 })
+
+test('identity rotation submits the new public key with the queried generation, without the old fingerprint', async () => {
+  const saved = []
+  const c = componentScript('components/IdentityManagement.vue', { api: {
+    loading: { value: false }, operations: { value: [] },
+    async findIdentity(id) { return { client_id: id, fingerprint: 'SHA256:old-key', generation: 7, revoked: false } },
+    async bindIdentity(body) { saved.push(JSON.parse(JSON.stringify(body))) },
+  } })
+  c.run("form.client_id = 'same-device'")
+  await c.run('lookup()')
+  c.run("publicKey.value = 'ssh-ed25519 new-key'; form.reason = 'Replace lost key'; verified.value = true")
+  await c.run('bind()')
+  assert.deepEqual(saved, [{ client_id: 'same-device', fingerprint: '', public_key: 'ssh-ed25519 new-key', reason: 'Replace lost key', expected_generation: 7 }])
+  assert.equal(c.run('verified.value'), false)
+  assert.equal(c.run('publicKey.value'), '')
+  await c.run('bind()')
+  assert.equal(saved.length, 1)
+})
+
+test('identity recovery uses the original fingerprint and changing device ID requires a fresh lookup', async () => {
+  const saved = []
+  const c = componentScript('components/IdentityManagement.vue', { api: {
+    loading: { value: false }, operations: { value: [] },
+    async findIdentity(id) { return { client_id: id, fingerprint: 'SHA256:original-key', generation: 4, revoked: true } },
+    async bindIdentity(body) { saved.push(JSON.parse(JSON.stringify(body))) },
+  } })
+  c.run("form.client_id = 'same-device'")
+  await c.run('lookup()')
+  c.run("form.client_id = 'different-device'; verified.value = true")
+  await c.run('bind()')
+  assert.equal(saved.length, 0)
+  c.run("form.client_id = 'same-device'; form.reason = 'Restore original identity'")
+  await c.run('lookup()')
+  c.run('verified.value = true')
+  await c.run('bind()')
+  assert.deepEqual(saved, [{ client_id: 'same-device', fingerprint: 'SHA256:original-key', reason: 'Restore original identity', expected_generation: 4 }])
+})

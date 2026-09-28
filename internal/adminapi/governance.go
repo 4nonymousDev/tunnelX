@@ -26,6 +26,7 @@ func (e *PendingOperationError) Error() string {
 type BindIdentityRequest struct {
 	ClientID           string `json:"client_id"`
 	Fingerprint        string `json:"fingerprint"`
+	PublicKey          string `json:"public_key,omitempty"`
 	ExpectedGeneration int64  `json:"expected_generation"`
 	Reason             string `json:"reason"`
 }
@@ -59,9 +60,15 @@ func (s *Server) serveGovernance(w http.ResponseWriter, r *http.Request, rid str
 			return true
 		}
 		reason, err := validText(body.Reason, 1, 500, "reason")
-		if err != nil || !store.ValidClientID(body.ClientID) || !store.ValidateFingerprint(body.Fingerprint) || body.ExpectedGeneration < 0 {
+		if err != nil || !store.ValidClientID(body.ClientID) || (body.PublicKey == "" && !store.ValidateFingerprint(body.Fingerprint)) || (body.Fingerprint != "" && !store.ValidateFingerprint(body.Fingerprint)) || body.ExpectedGeneration < 0 {
 			bad(w, rid, errors.New("valid client_id, fingerprint, generation and reason required"))
 			return true
+		}
+		if body.PublicKey != "" {
+			if _, err = validText(body.PublicKey, 1, 16384, "public_key"); err != nil || body.ExpectedGeneration < 1 {
+				bad(w, rid, errors.New("public_key replacement requires a current identity generation and at most 16384 characters"))
+				return true
+			}
 		}
 		body.Reason = reason
 		v, err := b.BindIdentity(r.Context(), body)

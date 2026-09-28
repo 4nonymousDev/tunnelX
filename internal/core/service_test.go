@@ -47,6 +47,43 @@ func TestGenerateKeyEmbedsRequestedMetadata(t *testing.T) {
 	}
 }
 
+func TestGeneratedKeysStayWithConfigAndNeverReplaceExistingPair(t *testing.T) {
+	s := testService(t)
+	dir, err := s.cfg.BaseDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalID := s.cfg.ID
+	first, _, err := s.GenerateKey("device_key", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.KeyPath != filepath.Join(dir, "device_key") {
+		t.Fatalf("key created outside config directory: %s", first.KeyPath)
+	}
+	private, err := os.ReadFile(first.KeyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = s.GenerateKey("device_key", "", ""); err == nil {
+		t.Fatal("existing pair overwritten")
+	}
+	if _, _, err = s.GenerateKey("replacement_key", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(first.KeyPath)
+	if err != nil || string(after) != string(private) {
+		t.Fatal("original private key changed")
+	}
+	public, err := os.ReadFile(first.PubPath)
+	if err != nil || string(public) != first.PublicKey {
+		t.Fatal("original public key changed")
+	}
+	if s.cfg.ID != originalID {
+		t.Fatal("key generation changed device ID")
+	}
+}
+
 func TestServicePublishesLogAndTunnelEvents(t *testing.T) {
 	s := testService(t)
 	events, unsubscribe := s.Subscribe(8)

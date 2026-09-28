@@ -1,8 +1,8 @@
 <template>
   <div class="backdrop" role="presentation" @click.self="emit('cancel')">
     <form class="dialog import-dialog" role="dialog" aria-modal="true" aria-labelledby="import-key-title" @submit.prevent="submit">
-      <h2 id="import-key-title" class="dialog-title">高级：登记原有公钥</h2>
-      <p class="description">用于维护原有设备。新设备请在账号管理中创建账号，由用户在客户端登录后自动登记。</p>
+      <h2 id="import-key-title" class="dialog-title">登记设备公钥</h2>
+      <p class="description">提交客户端的公钥和设备 ID，完成新设备登记或旧设备补登记。</p>
       <label class="field"><span>设备 ID（Client ID）</span><input v-model.trim="form.client_id" maxlength="128" required placeholder="填写该设备原配置中的 ID" /><small>请使用设备交给运维的原 ID，无需修改客户端配置。</small></label>
       <label class="field"><span>选择 .pub 文件</span><input type="file" accept=".pub,text/plain" @change="readFile" /></label>
       <label class="field"><span>公钥内容</span><textarea v-model.trim="form.public_key" rows="4" required placeholder="ssh-ed25519 AAAA... tunnelx:{...}" @input="parseMetadata" /></label>

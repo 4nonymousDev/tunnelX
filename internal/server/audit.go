@@ -382,6 +382,14 @@ func (b *adminBackend) BindIdentity(ctx context.Context, r adminapi.BindIdentity
 	s := (*Server)(b)
 	var bound store.IdentityBinding
 	var removals []*session.Removal
+	var metadata keygen.Metadata
+	if r.PublicKey != "" {
+		var err error
+		r.Fingerprint, metadata, err = parseReplacementKey(r)
+		if err != nil {
+			return bound, err
+		}
+	}
 	previous, err := s.store.GetIdentity(ctx, r.ClientID)
 	if err != nil && !errors.Is(err, store.ErrIdentityUnbound) {
 		return bound, identityBackendError(err)
@@ -391,6 +399,15 @@ func (b *adminBackend) BindIdentity(ctx context.Context, r adminapi.BindIdentity
 	}
 	previousFingerprint := previous.Fingerprint
 	err = s.policy.PersistChanges([]string{previousFingerprint, r.Fingerprint}, func() error {
+		// Recheck under the management writer before authorizing a new key.
+		// A stale browser must not change authorized_keys as a side effect.
+		current, lookupErr := s.store.GetIdentity(ctx, r.ClientID)
+		if lookupErr != nil && !errors.Is(lookupErr, store.ErrIdentityUnbound) {
+			return lookupErr
+		}
+		if current.Generation != r.ExpectedGeneration {
+			return adminapi.ErrConflict
+		}
 		// Migrated keys retain their original identity; restoration requires explicit approval.
 		deviceID, lookupErr := s.store.DeviceKeyIdentity(ctx, r.Fingerprint)
 		if lookupErr == nil {
@@ -399,8 +416,13 @@ func (b *adminBackend) BindIdentity(ctx context.Context, r adminapi.BindIdentity
 			}
 		} else if !errors.Is(lookupErr, sql.ErrNoRows) {
 			return lookupErr
-		} else if !s.auth.AuthorizedFingerprint(r.Fingerprint) {
+		} else if r.PublicKey == "" && !s.auth.AuthorizedFingerprint(r.Fingerprint) {
 			return &adminapi.BackendError{Code: "key_not_authorized", Message: "fingerprint must already be registered"}
+		}
+		if r.PublicKey != "" {
+			if err := s.importReplacementKey(ctx, r, metadata); err != nil {
+				return err
+			}
 		}
 		bound, err = s.store.BindIdentity(ctx, r.ClientID, r.Fingerprint, r.ExpectedGeneration, s.action(ctx, r.ClientID, "bind_identity", r.Reason, "success", ""))
 		return err

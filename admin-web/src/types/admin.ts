@@ -158,6 +158,7 @@ export interface AdminOperationDto {
 export interface BindIdentityRequestDto {
   client_id: string
   fingerprint: string
+  public_key?: string
   expected_generation: number
   reason: string
 }
