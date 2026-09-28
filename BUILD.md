@@ -28,6 +28,20 @@ go test ./...       # 运行测试
 go vet ./...        # 静态检查
 ```
 
+### Windows CLI
+
+只需 Go，无需构建 Electron 或管理后台：
+
+```powershell
+go build -ldflags "-s -w -X main.Version=0.1.0" -o tunnelx-cli.exe ./cmd/tunnelx-cli
+.\tunnelx-cli.exe run --bg
+.\tunnelx-cli.exe status
+.\tunnelx-cli.exe stop
+```
+
+`--bg` 在 Windows 隐藏控制台，在 Linux 脱离终端会话；不安装服务、
+不设置开机自启或异常重启。日志与确认方式见 [便携运行](README.md#便携运行)。
+
 ### 新客户端（Windows Electron GUI）
 
 先在仓库根目录构建独立 Go 核心，再构建桌面壳：

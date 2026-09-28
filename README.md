@@ -187,18 +187,29 @@ chmod +x tunnelx-cli
 
 `run` 在前台运行核心，`Ctrl-C` 停止。首次连接会显示服务器主机指纹，核对后输入确认。
 
-首次确认完成后，如果不创建 systemd 服务，也可以用 `nohup` 转入后台运行，
-并在终端关闭后继续保持隧道：
+Windows 和 Linux 均可用 `--bg` 脱离终端运行：
 
 ```bash
-nohup ./tunnelx-cli run > /dev/null 2>&1 < /dev/null &
-echo $! > tunnelx-cli.pid
+./tunnelx-cli run --bg
+./tunnelx-cli status
+./tunnelx-cli stop
 ```
 
-标准输出和错误输出被丢弃，但 TunnelX 仍会把内部日志写入配置目录的
-`tunnelx.log`。可用 `tail -f tunnelx.log` 查看日志；停止进程时执行
-`kill "$(cat tunnelx-cli.pid)"`。这种方式不会在系统重启后自动启动，也不会在
-进程崩溃后自动重启，需要这些能力时应使用 systemd。
+Windows PowerShell 中使用 `./tunnelx-cli.exe`。Windows 后台进程不显示控制台，
+Linux 后台进程通过 `setsid` 建立独立会话；标准输入、输出和错误输出均脱离终端。
+命令在核心完成本地初始化后返回 PID；这不代表已连接服务器。启动失败会返回错误。
+日志仍写入状态目录的 `tunnelx.log` 并轮转，可用 `logs --follow` 查看。
+`stop` 正常关闭整个核心，`disconnect` 只断开连接、保留进程。
+
+首次使用可以先前台运行并确认主机指纹，再用相同配置和状态目录后台启动；也可添加
+`--accept-host-key SHA256:已核对的指纹`。未指定指纹时，后台模式通过本地 API
+处理确认：用 `status` 查看待确认项，核对后执行 `confirm --id N --accept`。
+使用自定义路径时，启动和控制命令需指定相同的 `--config`、`--state-dir`，以及
+自定义的 `--endpoint`（如有）。`--bg` 仅适用于 `run`，也可省略 `run`
+直接执行 `tunnelx-cli --bg`。
+
+此模式不会开机自启或崩溃后自动重启，也不保证跨用户注销、系统休眠或外部进程管理器
+清理而持续运行；需要系统级托管时请使用 Windows 任务计划程序或 Linux systemd。
 
 ### 系统服务运行
 

@@ -140,7 +140,7 @@ func Classify(err error) *Fault {
 	msg := err.Error()
 	if strings.Contains(msg, "unable to authenticate") ||
 		strings.Contains(msg, "no supported methods remain") {
-		return fatal(err, "设备登录凭据已失效或未获授权，请重新使用账号密码登录；若仍失败，请联系管理员检查账号和设备状态")
+		return fatal(err, "SSH 公钥认证失败，请检查服务器地址和私钥路径，并联系管理员核对设备公钥授权及封禁状态；新设备需登记公钥和设备 ID")
 	}
 	if strings.Contains(msg, "ssh: handshake failed") {
 		return retryable(err, "SSH 握手失败：%v", err)

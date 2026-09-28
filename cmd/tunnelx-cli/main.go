@@ -24,13 +24,24 @@ import (
 var Version = "dev"
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	report, err := backgroundStartupReporter()
+	if err == nil {
+		err = runWithStartup(os.Args[1:], report)
+	}
+	if err != nil {
+		if report != nil {
+			_ = report(err)
+		}
 		fmt.Fprintln(os.Stderr, "tunnelx-cli:", err)
 		os.Exit(1)
 	}
 }
 
 func run(args []string) error {
+	return runWithStartup(args, nil)
+}
+
+func runWithStartup(args []string, report func(error) error) error {
 	if len(args) > 0 {
 		switch args[0] {
 		case "help", "-h", "--help":
@@ -53,6 +64,7 @@ func run(args []string) error {
 	stateDir := fs.String("state-dir", "", "writable directory for known_hosts, logs and control state")
 	acceptFingerprint := fs.String("accept-host-key", "", "accept only this SHA256 host fingerprint")
 	confirmViaAPI := fs.Bool("confirm-via-api", false, "publish confirmation requests through the local control API")
+	background := fs.Bool("bg", false, "run detached in the background (run command only)")
 	follow := fs.Bool("follow", false, "follow new log entries (logs command)")
 	confirmationID := fs.Uint64("id", 0, "confirmation request id")
 	accept := fs.Bool("accept", false, "accept a confirmation request")
@@ -65,6 +77,12 @@ func run(args []string) error {
 	}
 	if len(fs.Args()) != 0 {
 		return fmt.Errorf("未知参数: %s", strings.Join(fs.Args(), " "))
+	}
+	if *background && command != "run" {
+		return fmt.Errorf("--bg 仅适用于 run 命令")
+	}
+	if *confirmViaAPI && *acceptFingerprint != "" {
+		return fmt.Errorf("--confirm-via-api 不能与 --accept-host-key 同时使用")
 	}
 
 	var cfg *config.Config
@@ -90,8 +108,14 @@ func run(args []string) error {
 
 	switch command {
 	case "run":
-		return runDaemon(cfg, endpoint, *acceptFingerprint, *confirmViaAPI)
-	case "status", "connect", "disconnect", "logs", "tunnels", "confirm":
+		if *background {
+			return startBackground(cfg, endpoint, *acceptFingerprint, *confirmViaAPI)
+		}
+		if report != nil && *acceptFingerprint == "" {
+			*confirmViaAPI = true
+		}
+		return runDaemon(cfg, endpoint, *acceptFingerprint, *confirmViaAPI, report)
+	case "status", "connect", "disconnect", "logs", "tunnels", "confirm", "stop":
 		return runControl(command, endpoint, *follow, *confirmationID, *accept, *reject)
 	default:
 		return fmt.Errorf("未知命令 %q", command)
@@ -102,10 +126,11 @@ func usage() {
 	fmt.Println(`TunnelX headless client
 
 Usage:
-  tunnelx-cli run [--config path] [--accept-host-key SHA256:...] [--confirm-via-api]
+  tunnelx-cli run [--bg] [--config path] [--state-dir path] [--accept-host-key SHA256:...] [--confirm-via-api]
   tunnelx-cli keygen [--username NAME] [--email EMAIL] [--output path]
   tunnelx-cli status [--config path]
   tunnelx-cli connect|disconnect [--config path]
+  tunnelx-cli stop [--config path] [--state-dir path]
   tunnelx-cli logs [--follow] [--config path]
   tunnelx-cli tunnels [--config path]
   tunnelx-cli confirm --id N (--accept|--reject) [--config path]`)
@@ -168,7 +193,7 @@ func runKeygen(args []string, out io.Writer) error {
 	return nil
 }
 
-func runDaemon(cfg *config.Config, endpoint, fingerprint string, confirmViaAPI bool) error {
+func runDaemon(cfg *config.Config, endpoint, fingerprint string, confirmViaAPI bool, report func(error) error) error {
 	confirmation, err := confirmationForRun(fingerprint, confirmViaAPI, os.Stdin)
 	if err != nil {
 		return err
@@ -201,6 +226,9 @@ func runDaemon(cfg *config.Config, endpoint, fingerprint string, confirmViaAPI b
 		}
 	}()
 	unsub := log.Subscribe(func(entry logbuf.Entry) {
+		if report != nil {
+			return // Background output goes to the rotating file sink only.
+		}
 		select {
 		case console <- entry:
 		default:
@@ -231,11 +259,16 @@ func runDaemon(cfg *config.Config, endpoint, fingerprint string, confirmViaAPI b
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(signals)
+	if report != nil {
+		if err := report(nil); err != nil {
+			return fmt.Errorf("报告后台启动状态: %w", err)
+		}
+	}
 	select {
 	case <-signals:
 		log.Infof("app", "收到退出信号")
 	case <-api.Done():
-		log.Infof("app", "收到桌面端退出请求")
+		log.Infof("app", "收到本地控制退出请求")
 	}
 	return nil
 }
@@ -262,6 +295,8 @@ func runControl(command, endpoint string, follow bool, confirmationID uint64, ac
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	switch command {
+	case "stop":
+		return client.Shutdown(ctx)
 	case "connect":
 		return client.Connect(ctx)
 	case "disconnect":

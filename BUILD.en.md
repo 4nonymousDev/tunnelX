@@ -27,6 +27,21 @@ go test ./...       # Run tests
 go vet ./...        # Static checks
 ```
 
+### Windows CLI
+
+Only Go is required; Electron and the management UI do not need to be built:
+
+```powershell
+go build -ldflags "-s -w -X main.Version=0.1.0" -o tunnelx-cli.exe ./cmd/tunnelx-cli
+.\tunnelx-cli.exe run --bg
+.\tunnelx-cli.exe status
+.\tunnelx-cli.exe stop
+```
+
+`--bg` runs without a console on Windows and creates a detached session on
+Linux. It installs no service and provides neither boot startup nor crash recovery.
+See [Portable execution](README.en.md#portable-execution) for logging and confirmations.
+
 ### New client (Windows Electron GUI)
 
 Build the standalone Go core from the repository root, then build the desktop

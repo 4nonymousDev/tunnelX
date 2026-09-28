@@ -174,19 +174,32 @@ chmod +x tunnelx-cli
 
 `run` keeps the core in the foreground; press Ctrl-C to stop. The first connection displays the host fingerprint and asks for confirmation.
 
-After completing the first host-key confirmation, you can keep the client running after
-the terminal closes without creating a systemd service by using `nohup`:
+Use `--bg` to detach from the terminal on both Windows and Linux:
 
 ```bash
-nohup ./tunnelx-cli run > /dev/null 2>&1 < /dev/null &
-echo $! > tunnelx-cli.pid
+./tunnelx-cli run --bg
+./tunnelx-cli status
+./tunnelx-cli stop
 ```
 
-Standard output and standard error are discarded, while TunnelX continues writing its
-internal log to `tunnelx.log` in the configuration directory. Use
-`tail -f tunnelx.log` to follow it and `kill "$(cat tunnelx-cli.pid)"` to stop the process.
-This method does not start automatically after a reboot or restart the process after a
-crash; use systemd when those capabilities are required.
+Use `./tunnelx-cli.exe` in Windows PowerShell. Windows runs without a console;
+Linux creates a separate session with `setsid`. All standard streams are detached.
+The launcher returns a PID after local initialization succeeds, or an error if startup
+fails. Successful startup does not imply a successful server connection. Logs continue
+to rotate in `tunnelx.log` under the state directory; follow them with `logs --follow`.
+`stop` shuts down the core, while `disconnect` leaves the process running.
+
+Confirm the host key in the foreground first and reuse the same configuration and
+state directory, or pass `--accept-host-key SHA256:verified-fingerprint`. Without a
+fingerprint, background mode handles confirmations through the local API: inspect
+pending requests with `status`, verify them, then use `confirm --id N --accept`.
+Use matching `--config`, `--state-dir`, and custom `--endpoint` options, if supplied,
+for startup and control commands. `--bg` only applies to `run`; the shorthand
+`tunnelx-cli --bg` also works.
+
+This mode provides neither startup at boot nor automatic crash recovery. It does not
+guarantee survival across user logout, system sleep, or cleanup by an external process
+manager. Use Windows Task Scheduler or Linux systemd for system-managed execution.
 
 ### System service execution
 
