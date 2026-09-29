@@ -307,3 +307,46 @@ test('successful deletion stays successful if the following refresh fails', asyn
     assert.equal(h.api.error.value, 'Refresh failed')
   } finally { h.close() }
 })
+
+
+test('client history requests use separate endpoints, five-row pages and encoded cursors', async () => {
+  const h = harness()
+  try {
+    await h.api.restoreSession()
+    h.route(({ url }) => {
+      if (url.includes('/audit/events?') || url.includes('/admin-actions?')) return json({ items: [{ id: 'row' }], next_cursor: 'next-page' })
+    })
+    const access = await h.api.loadClientAccessPage('SHA256:a/b+c', 'cursor/+')
+    const actions = await h.api.loadClientActionsPage('SHA256:a/b+c')
+    assert.equal(access.next_cursor, 'next-page')
+    assert.equal(actions.next_cursor, 'next-page')
+    const calls = h.calls.slice(-2)
+    const first = new URL(calls[0].url, 'http://localhost')
+    const second = new URL(calls[1].url, 'http://localhost')
+    assert.equal(first.pathname, '/api/v1/audit/events')
+    assert.equal(second.pathname, '/api/v1/admin-actions')
+    assert.equal(first.searchParams.get('fingerprint'), 'SHA256:a/b+c')
+    assert.equal(first.searchParams.get('cursor'), 'cursor/+')
+    assert.equal(first.searchParams.get('limit'), '5')
+    assert.equal(second.searchParams.get('limit'), '5')
+    assert.equal(second.searchParams.has('cursor'), false)
+  } finally { h.close() }
+})
+
+test('switching client details ignores the old response and no longer preloads history', async () => {
+  const h = harness(), old = deferred()
+  try {
+    await h.api.restoreSession()
+    const start = h.calls.length
+    h.route(({ url }) => {
+      if (url === '/api/v1/clients/old') return old.promise
+      if (url === '/api/v1/clients/new') return json({ fingerprint: 'new' })
+    })
+    const pending = h.api.loadClientDetail('old')
+    await h.api.loadClientDetail('new')
+    old.resolve(json({ fingerprint: 'old' }))
+    await pending
+    assert.equal(h.api.clientDetail.value.client.fingerprint, 'new')
+    assert.ok(h.calls.slice(start).every(call => !call.url.includes('/audit/events') && !call.url.includes('/admin-actions')))
+  } finally { h.close() }
+})

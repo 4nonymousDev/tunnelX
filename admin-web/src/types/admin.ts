@@ -108,8 +108,6 @@ export interface AdminActionDto {
 export interface ClientDetailDto {
   client: ClientDto
   sessions: readonly SessionDto[]
-  access_events: readonly AuditEventDto[]
-  admin_actions: readonly AdminActionDto[]
 }
 
 export interface AuditQuery {

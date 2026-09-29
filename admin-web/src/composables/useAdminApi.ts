@@ -22,6 +22,7 @@ import type {
 } from '../types/admin'
 
 const API_ROOT = '/api/v1'
+export const CLIENT_HISTORY_PAGE_SIZE = 5
 
 function listPage<T>(payload: unknown): PageDto<T> {
   if (Array.isArray(payload)) return { items: payload as T[], next_cursor: null }
@@ -53,6 +54,7 @@ export function useAdminApi() {
   let refreshRunning = false
   let refreshDirty = false
   let authEpoch = 0
+  let detailRequestId = 0
   const requests = new Set<AbortController>()
   let currentAuditQuery: AuditQuery = {}
 
@@ -170,19 +172,26 @@ export function useAdminApi() {
   }
   async function loadClientDetail(fingerprint: string) {
     const epoch = authEpoch
+    const requestId = ++detailRequestId
     const encoded = encodeURIComponent(fingerprint)
     const query = new URLSearchParams({ fingerprint, limit: '200' })
-    const [client, sessionPayload, auditPayload, actionPayload] = await Promise.all([
+    const [client, sessionPayload] = await Promise.all([
       request<ClientDto>(`/clients/${encoded}`), request(`/sessions?${query}`),
-      request(`/audit/events?${query}`), request(`/admin-actions?${query}`),
     ])
-    if (epoch !== authEpoch || !session.value) return
-    clientDetail.value = {
-      client,
-      sessions: listPage<SessionDto>(sessionPayload).items,
-      access_events: listPage<AuditEventDto>(auditPayload).items,
-      admin_actions: listPage<AdminActionDto>(actionPayload).items,
-    }
+    if (epoch !== authEpoch || requestId !== detailRequestId || !session.value) return
+    clientDetail.value = { client, sessions: listPage<SessionDto>(sessionPayload).items }
+  }
+
+  function clientHistoryQuery(fingerprint: string, cursor?: string) {
+    const query = new URLSearchParams({ fingerprint, limit: String(CLIENT_HISTORY_PAGE_SIZE) })
+    if (cursor) query.set('cursor', cursor)
+    return query
+  }
+  async function loadClientAccessPage(fingerprint: string, cursor?: string) {
+    return listPage<AuditEventDto>(await request(`/audit/events?${clientHistoryQuery(fingerprint, cursor)}`))
+  }
+  async function loadClientActionsPage(fingerprint: string, cursor?: string) {
+    return listPage<AdminActionDto>(await request(`/admin-actions?${clientHistoryQuery(fingerprint, cursor)}`))
   }
 
   async function refreshAll() {
@@ -419,7 +428,7 @@ export function useAdminApi() {
     overview: readonly(overview), sessions: readonly(sessions), clients: readonly(clients),
     clientDetail: readonly(clientDetail), auditPage: readonly(auditPage), adminActions: readonly(adminActions),
     loading: readonly(loading), error: readonly(error), eventsConnected: readonly(eventsConnected),
-    authenticate, restoreSession, logout, refreshAll, loadAudit, loadClientDetail, disconnectSession,
+    authenticate, restoreSession, logout, refreshAll, loadAudit, loadClientDetail, loadClientAccessPage, loadClientActionsPage, disconnectSession,
     updateClientNote, deleteClient, importPublicKey, blockClient, unblockClient, exportAudit,
     identities: readonly(identities), identityClaims: readonly(identityClaims), operations: readonly(operations),
     loadGovernance, findIdentity, bindIdentity, revokeIdentity, reconcileOperation,
