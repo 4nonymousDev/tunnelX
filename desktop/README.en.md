@@ -7,9 +7,9 @@ cannot read the control token.
 
 ## Public-key access
 
-Clients authenticate with device public keys. Administrators register the key and device ID together under **Device management → Register device**. The console retains administrator password login. Existing keys, IDs and tunnels are preserved; valid account-enrolled devices migrate to independent key authorization, while restricted devices remain restricted. See the [client access guide](../CLIENT_ACCESS_GUIDE.md).
+Clients authenticate with device public keys. Administrators register the key and device ID together under **Device management → Register device**. The console retains administrator password login. Device registrations in the current database layout are retained, along with existing keys, IDs and tunnels. See the [client access guide](../CLIENT_ACCESS_GUIDE.md).
 
-Set the server address in Connection settings, retain the existing private key or generate one for a new device, then send the public key and device ID to the administrator. Verify the server fingerprint on first connection. The local interface lock remains independent; client configuration stays at schema 2.
+Set the server address in Connection settings, retain the existing private key or generate one for a new device, then send the public key and device ID to the administrator. Verify the server fingerprint on first connection. The local interface lock remains independent; client configuration uses the current structure.
 
 ## Architecture
 

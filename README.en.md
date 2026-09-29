@@ -26,7 +26,7 @@ TunnelX is an SSH port-forwarding tool for remote development and debugging. It 
 - Importers bind a verified device, public key, and tunnel ID, checking the current session and publication generation on each connection.
 - The server provides no shell and accepts no arbitrary server-address or TCP-port forwarding.
 
-For an existing installation, read the [upgrade instructions](deploy/README.en.md#existing-installations-and-recovery). Clients authenticate with device public keys. Administrators register the key and device ID together under **Device management → Register device**. The console retains administrator password login. Existing keys, IDs and tunnels are preserved; valid account-enrolled devices migrate to independent key authorization, while restricted devices remain restricted. See the [client access guide](CLIENT_ACCESS_GUIDE.md).
+For an existing installation, read the [installation instructions](deploy/README.en.md#reinstallation-and-data-retention). Clients authenticate with device public keys. Administrators register the key and device ID together under **Device management → Register device**. The console retains administrator password login. Device registrations in the current database layout are retained, along with existing keys, IDs and tunnels. See the [client access guide](CLIENT_ACCESS_GUIDE.md).
 
 ## Quick Start
 
@@ -45,7 +45,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
   go build -ldflags "-s -w" -o tunnel-server-linux-amd64 ./cmd/tunnel-server
 
 # Upload and install
-scp deploy/install.sh deploy/upgrade.sh tunnel-server-linux-amd64 user@your-server:~/
+scp deploy/install.sh tunnel-server-linux-amd64 user@your-server:~/
 ssh user@your-server 'chmod +x install.sh && sudo ./install.sh'
 ```
 
@@ -64,7 +64,7 @@ Open Connection settings and retain the existing private key, or generate one fo
 
 ### 3. Register and connect
 
-Clients authenticate with device public keys. Administrators register the key and device ID together under **Device management → Register device**. The console retains administrator password login. Existing keys, IDs and tunnels are preserved; valid account-enrolled devices migrate to independent key authorization, while restricted devices remain restricted. See the [client access guide](CLIENT_ACCESS_GUIDE.md).
+Clients authenticate with device public keys. Administrators register the key and device ID together under **Device management → Register device**. The console retains administrator password login. Device registrations in the current database layout are retained, along with existing keys, IDs and tunnels. See the [client access guide](CLIENT_ACCESS_GUIDE.md).
 
 After registration, save settings and connect. Verify the server fingerprint on first connection. Keep private keys on the client.
 
@@ -80,7 +80,7 @@ Then open `http://localhost:<your-local-port>` to reach the peer service.
 
 Desktop configuration defaults to Electron's `userData/config.json`; the CLI uses its selected configuration file. Manual editing is normally unnecessary.
 
-Client configuration remains at schema 2; the server database upgrades to schema 7. Migrations preserve existing identities, keys, and tunnels. Back up before upgrading; see the [upgrade instructions](deploy/README.en.md#existing-installations-and-recovery).
+Client configuration uses the current structure. The server maintains one current database layout with no historical migrations; existing data in that layout is retained. Back up before upgrading; see the [installation instructions](deploy/README.en.md#reinstallation-and-data-retention).
 
 See [config.example.json](config.example.json) for a complete annotated example.
 
@@ -93,7 +93,6 @@ See [config.example.json](config.example.json) for a complete annotated example.
 | `server_addr` | `host:port`. The port belongs to tunnel-server (2222 by default), not the system sshd on port 22. |
 | `key_path` | Private-key path. Relative paths are resolved from the configuration directory. |
 
-The `server_user` field in legacy configurations is ignored; connections always use TunnelX's internal protocol value.
 
 ### Export tunnels
 
@@ -133,14 +132,14 @@ The server routes directly to the verified exporter's SSH connection; no relay p
 | `peer_id` | The peer's `id` from `config.json`. A typo looks like an offline peer, but logs list the actual registry values for comparison. |
 | `peer_tunnel_id` | The peer export's `id`. Together with `peer_id`, it distinguishes identical ports on different addresses. Prefer **Add from online list**. |
 | `peer_name` | Display only. Renaming the peer does not affect matching, which uses `peer_id + peer_tunnel_id`. |
-| `peer_src_port` | The peer's `local_port`, used for display, the default local port, and compatibility with old configurations lacking `peer_tunnel_id`. It is **not** the server-allocated port. |
+| `peer_src_port` | The peer's `local_port`, used for display, the default local port. It is **not** the server-allocated port. |
 | `listen_port` | Local listening port, which may differ from `peer_src_port`. Binding below 1024 on Windows requires administrator privileges. |
 
 Prefer **Add from online list** because manually entering `peer_id` is error-prone.
 
 `enabled: false` temporarily disables a tunnel without deleting its configuration.
 
-An old import without `peer_tunnel_id` is completed only when its `peer_id + peer_src_port` uniquely matches the trusted registry. Ambiguous matches are rejected. Version 1 programs must upgrade to v2.
+Imports must specify `peer_tunnel_id` and match the peer identity and tunnel ID.
 
 ## Linux CLI Client
 
@@ -262,7 +261,7 @@ tunnelx-cli commands ───┘          ▲
 
 | Document | Contents |
 |---|---|
-| [CLIENT_ACCESS_GUIDE.md](CLIENT_ACCESS_GUIDE.md) | Public-key registration, device migration, and preserved data |
+| [CLIENT_ACCESS_GUIDE.md](CLIENT_ACCESS_GUIDE.md) | Public-key registration and preserved data |
 | [BUILD.en.md](BUILD.en.md) | Build instructions, directory layout, tests, and troubleshooting |
 | [DEPLOY.en.md](DEPLOY.en.md) | Complete deployment guide, key planning, firewall, and audit logs |
 | [deploy/README.en.md](deploy/README.en.md) | One-click installer usage |
@@ -293,7 +292,7 @@ tunnelx-cli commands ───┘          ▲
 
 - The server routes to an exact device, key, tunnel, session, and publication generation, without relay ports or shell access.
 - Arbitrary server-address forwarding and legacy TCP forwarding are rejected.
-- SSH password authentication is disabled. Device public keys require administrator approval and a matching device ID; migrated keys preserve existing restrictions.
+- SSH password authentication is disabled. Device public keys require administrator approval and a matching device ID; registered keys preserve existing restrictions.
 - The management API may bind only to an explicit loopback address and requires administrator account login. An HttpOnly session cookie retains login; writes require matching origin and CSRF validation. Legacy Bearer tokens are not accepted.
 - Online client state is memory-only; profiles, blacklist entries, and new audit events use pure-Go SQLite.
 - Clients validate private-key permissions with Windows ACLs or Unix file modes.
@@ -305,4 +304,4 @@ These boundaries are enforced by `internal/server/security_test.go`; loosening t
 
 The complete path has been tested between Windows 11 and a Linux server. Core functionality is usable and details continue to be refined. Issues are welcome.
 
-Clients authenticate with device public keys. Administrators register the key and device ID together under **Device management → Register device**. The console retains administrator password login. Existing keys, IDs and tunnels are preserved; valid account-enrolled devices migrate to independent key authorization, while restricted devices remain restricted. See the [client access guide](CLIENT_ACCESS_GUIDE.md). The server database is schema 7 and client configuration remains schema 2. Existing authorized v2 clients can connect directly; v1 programs must upgrade. Recovery requires matching program and database backups.
+Clients authenticate with device public keys. Administrators register the key and device ID together under **Device management → Register device**. The console retains administrator password login. Device registrations in the current database layout are retained, along with existing keys, IDs and tunnels. See the [client access guide](CLIENT_ACCESS_GUIDE.md). The server uses one current database layout without historical migrations; client configuration uses the current structure.  Recovery requires matching program and database backups.

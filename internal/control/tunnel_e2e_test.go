@@ -73,13 +73,14 @@ func TestEndToEndTunnel(t *testing.T) {
 	impLog := logbuf.New(nil)
 	t.Cleanup(func() { dumpLog(t, "importer", impLog) })
 	impTun := tunnel.New(config.Tunnel{
-		Kind:        config.KindImport,
-		Name:        "Echo接入",
-		Enabled:     true,
-		PeerID:      "peer-uuid",
-		PeerName:    "办公室PC",
-		PeerSrcPort: echoPort,
-		ListenPort:  listenPort,
+		Kind:         config.KindImport,
+		Name:         "Echo接入",
+		Enabled:      true,
+		PeerID:       "peer-uuid",
+		PeerTunnelID: expTun.Config().ID,
+		PeerName:     "办公室PC",
+		PeerSrcPort:  echoPort,
+		ListenPort:   listenPort,
 	}, impLog, nil)
 
 	impTun.Start(ctx, impSSH, impCtrl, impCtrl)
@@ -127,7 +128,7 @@ func TestEndToEndTunnel(t *testing.T) {
 	}
 	// Re-publication must not strand an already running importer, and an old
 	// generation must never be accepted as a request for the new publication.
-	oldTarget, err := impCtrl.ResolveTarget("peer-uuid", "", expTun.Config().ID, echoPort)
+	oldTarget, err := impCtrl.ResolveTarget("peer-uuid", "", expTun.Config().ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +138,7 @@ func TestEndToEndTunnel(t *testing.T) {
 	expTun.Start(ctx, expSSH, expCtrl, expCtrl)
 	waitState(t, expTun, tunnel.StateRunning)
 	waitRegistry(t, impCtrl, 1)
-	newTarget, err := impCtrl.ResolveTarget("peer-uuid", oldTarget.Fingerprint, oldTarget.TunnelID, echoPort)
+	newTarget, err := impCtrl.ResolveTarget("peer-uuid", oldTarget.Fingerprint, oldTarget.TunnelID)
 	if err != nil || newTarget.Generation == oldTarget.Generation {
 		t.Fatalf("generation was reused: %+v %v", newTarget, err)
 	}
@@ -171,12 +172,13 @@ func TestImportPeerOffline(t *testing.T) {
 	impCtrl := dialClient(t, addr, keyPath, "importer-uuid", "笔记本", proto.RoleImporter)
 
 	impTun := tunnel.New(config.Tunnel{
-		Kind:        config.KindImport,
-		Name:        "接入不存在的对端",
-		Enabled:     true,
-		PeerID:      "nobody-home",
-		PeerSrcPort: 80,
-		ListenPort:  freePort(t),
+		Kind:         config.KindImport,
+		Name:         "接入不存在的对端",
+		Enabled:      true,
+		PeerID:       "nobody-home",
+		PeerTunnelID: "web",
+		PeerSrcPort:  80,
+		ListenPort:   freePort(t),
 	}, logbuf.New(nil), nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -243,7 +245,7 @@ func TestWrongPeerIDIsDiagnosable(t *testing.T) {
 	impLog := logbuf.New(nil)
 	impTun := tunnel.New(config.Tunnel{
 		Kind: config.KindImport, Name: "接入nginx", Enabled: true,
-		PeerID: "wrong-peer-id", // ← 填错 / Intentionally incorrect.
+		PeerID: "wrong-peer-id", PeerTunnelID: "web", // ← 填错 / Intentionally incorrect.
 		// Intentionally incorrect.
 		PeerSrcPort: echoPort,
 		ListenPort:  freePort(t),

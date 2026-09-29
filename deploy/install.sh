@@ -14,10 +14,10 @@
 #   sudo ./install.sh --uninstall --purge      # 卸载并删除全部数据
 #   sudo ./install.sh --uninstall --purge      # Uninstall and delete all data
 #
-# 脚本可重复执行：已存在的主机密钥、authorized_keys、管理 Token 与数据不会被覆盖。
+# 脚本可重复执行：已存在的主机密钥、authorized_keys 与数据不会被覆盖。
 # 升级只需把新的二进制放在脚本旁边再跑一次。
 # The script is idempotent: it never overwrites an existing host key,
-# authorized_keys file, management token, or data. To upgrade, place the new
+# authorized_keys file, or data. To upgrade, place the new
 # binary beside this script and run it again.
 
 set -euo pipefail
@@ -33,7 +33,6 @@ SERVICE_NAME="tunnel-server"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 RUN_USER="tunnel"
 PORT="2222"
-PORT_SET=0
 DO_UNINSTALL=0
 DO_PURGE=0
 
@@ -74,7 +73,7 @@ usage() {
 # ---------- Arguments ----------
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --port)      PORT="${2:?--port 需要一个端口号}"; PORT_SET=1; shift 2 ;;
+        --port)      PORT="${2:?--port 需要一个端口号}"; shift 2 ;;
         --binary)    BINARY_NAME="${2:?--binary 需要一个文件名}"; shift 2 ;;
         --uninstall) DO_UNINSTALL=1; shift ;;
         --purge)     DO_PURGE=1; shift ;;
@@ -145,14 +144,18 @@ if command -v file >/dev/null 2>&1; then
     esac
 fi
 
-if [[ -n $(systemctl show "$SERVICE_NAME" -p FragmentPath --value 2>/dev/null || true) ]]; then
-    ((PORT_SET == 0)) || die "升级保留原端口，请不要传 --port"
-    [[ -f "$SCRIPT_DIR/upgrade.sh" ]] || die "升级需要同目录的 deploy/upgrade.sh"
-    exec bash "$SCRIPT_DIR/upgrade.sh" "$SRC_BINARY"
-fi
 chmod +x -- "$SRC_BINARY"
 "$SRC_BINARY" -version >/dev/null || die "新二进制无法运行"
 info "安装 tunnel-server（端口 $PORT）"
+
+# Existing state must retain its credentials; never silently create a new identity.
+if [[ -f "$DATA_DIR/tunnel-server.db" ]]; then
+    [[ -f "$CONFIG_DIR/host_key" && -f "$DATA_DIR/authorized_keys" ]] || die "已有数据库但主机密钥或授权文件缺失，请先恢复原文件"
+fi
+if [[ -f "$DATA_DIR/authorized_keys" ]]; then
+    "$SRC_BINARY" -check-auth -auth "$DATA_DIR/authorized_keys" || die "授权公钥文件校验失败"
+fi
+
 
 # ---------- 服务账户 ----------
 # ---------- Service account ----------
@@ -180,7 +183,33 @@ else
     WAS_RUNNING=0
 fi
 
-install -m 0755 "$SRC_BINARY" "$INSTALL_PATH"
+# Back up data independently of program installation; no historical rule conversion.
+BACKUP=""
+STAGED=""
+RESTART_OLD=$WAS_RUNNING
+cleanup() {
+    local status=$?
+    [[ -z "$STAGED" ]] || rm -f -- "$STAGED"
+    if ((status != 0 && RESTART_OLD)); then systemctl start "$SERVICE_NAME" || true; fi
+    if ((status != 0)); then printf '安装失败。备份目录：%s\n' "${BACKUP:-未创建}" >&2; fi
+}
+trap cleanup EXIT
+if [[ -e "$INSTALL_PATH" || -d "$DATA_DIR" || -d "$CONFIG_DIR" ]]; then
+    BACKUP="/var/backups/tunnel-server/$(date -u +%Y%m%dT%H%M%SZ)-$$"
+    mkdir -p "$BACKUP"
+    chmod 700 "$BACKUP"
+    [[ ! -d "$DATA_DIR" ]] || cp -a "$DATA_DIR" "$BACKUP/data"
+    [[ ! -d "$CONFIG_DIR" ]] || cp -a "$CONFIG_DIR" "$BACKUP/config"
+    [[ ! -f "$INSTALL_PATH" ]] || cp -a "$INSTALL_PATH" "$BACKUP/tunnel-server"
+    [[ ! -f "$SERVICE_FILE" ]] || cp -a "$SERVICE_FILE" "$BACKUP/tunnel-server.service"
+    [[ ! -d "${SERVICE_FILE}.d" ]] || cp -a "${SERVICE_FILE}.d" "$BACKUP/drop-ins"
+    ok "原数据与程序已备份至 $BACKUP"
+fi
+STAGED=$(mktemp "${INSTALL_PATH}.new.XXXXXX")
+install -m 0755 "$SRC_BINARY" "$STAGED"
+RESTART_OLD=0
+mv -f "$STAGED" "$INSTALL_PATH"
+STAGED=""
 ok "二进制已安装到 $INSTALL_PATH"
 
 VERSION="$("$INSTALL_PATH" -version 2>/dev/null || echo '未知版本')"
@@ -208,13 +237,6 @@ fi
 
 # 授权公钥：同样不覆盖。
 # Never overwrite authorized public keys either.
-if [[ -f "$CONFIG_DIR/authorized_keys" ]]; then
-    if [[ -e "$DATA_DIR/authorized_keys" ]]; then
-        cmp -s "$CONFIG_DIR/authorized_keys" "$DATA_DIR/authorized_keys" || die "两处 authorized_keys 不一致，请先合并确认后重新安装"
-    else
-        install -m 0600 "$CONFIG_DIR/authorized_keys" "$DATA_DIR/authorized_keys"
-    fi
-fi
 if [[ -f "$DATA_DIR/authorized_keys" ]]; then
     key_count="$(count_keys)"
     ok "authorized_keys 已存在（$key_count 个公钥），保留不动"
@@ -231,24 +253,14 @@ chmod 600 "$CONFIG_DIR/host_key" "$DATA_DIR/authorized_keys"
 # ---------- 管理账号与数据目录 ----------
 # ---------- Management accounts and data directory ----------
 # Administrators are explicitly provisioned in SQLite using -admin-account.
-# Legacy token files remain untouched but no longer authenticate requests.
 mkdir -p "$DATA_DIR"
 chown "$RUN_USER:$RUN_USER" "$DATA_DIR"
 chmod 700 "$DATA_DIR"
 
-# 新版本只写 SQLite。升级时不删除旧 JSONL，留给管理员自行归档。
-# The new version writes only SQLite. Preserve legacy JSONL during upgrades so
-# an administrator can archive it manually.
-if [[ -f /var/log/tunnel-server/audit.jsonl ]]; then
-    warn "检测到旧审计文件 /var/log/tunnel-server/audit.jsonl，已保留供人工归档"
-fi
-if [[ -f /etc/logrotate.d/tunnel-server ]]; then
-    rm -f /etc/logrotate.d/tunnel-server
-    ok "已移除旧 JSONL 审计的 logrotate 配置（审计文件本身保留）"
-fi
-
 # ---------- systemd 单元 ----------
 # ---------- systemd unit ----------
+# Remove the former installer-owned override after backing it up. User overrides remain.
+rm -f "/etc/systemd/system/${SERVICE_NAME}.service.d/90-tunnelx-upgrade.conf"
 cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=TunnelX Tunnel Server
@@ -338,7 +350,7 @@ fi
 
 # ---------- 完成 ----------
 # ---------- Completion ----------
-FINGERPRINT="$(ssh-keygen -lf "$CONFIG_DIR/host_key.pub" 2>/dev/null | awk '{print $2}')"
+FINGERPRINT="$(ssh-keygen -lf "$CONFIG_DIR/host_key" 2>/dev/null | awk '{print $2}')"
 KEY_COUNT="$(count_keys)"
 
 cat <<EOF
@@ -360,7 +372,7 @@ ${c_bold}常用命令${c_off}
 
 ${c_bold}访问管理后台${c_off}
 
-  首次创建管理员（密码交互输入，不写入命令行）：
+  仅首次安装创建管理员；已有账号无需重复执行（此命令会重设同名账号密码）：
   sudo systemctl stop $SERVICE_NAME
   sudo -u $RUN_USER $INSTALL_PATH -data-dir $DATA_DIR -admin-account admin
   sudo systemctl start $SERVICE_NAME

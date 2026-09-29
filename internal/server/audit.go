@@ -4,14 +4,10 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"net"
-	"os"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -21,23 +17,6 @@ import (
 	"tunnelx/internal/session"
 	"tunnelx/internal/store"
 )
-
-// auditLog 记录会话与隧道的历史，与在线注册表完全分离。
-// 在线注册表是纯内存的、断开即摘除——它回答"现在谁在线"。
-// 审计日志回答的是另一个问题："上周三谁访问了办公室PC"。二者不可互相替代，
-// 也正因如此，加入审计不影响注册表"重启即清空"这一决策的简洁性。
-// 输出为 JSON Lines：每行一个事件，便于用 grep/jq 直接分析，也便于日后导入
-// 其他系统。
-// auditLog records session and tunnel history separately from the live in-memory
-// registry: one answers historical access questions, while the other describes who
-// is online now. JSON Lines remains easy to inspect with grep/jq and import elsewhere.
-type auditLog struct {
-	mu sync.Mutex
-	f  *os.File
-	// enabled 为 false 时所有写入变为空操作，用于未配置审计路径的情形。
-	// When enabled is false, writes are no-ops because no audit path was configured.
-	enabled bool
-}
 
 // adminBackend adapts live and persistent server state to the transport-only
 // adminapi contract without exposing either implementation package to HTTP.
@@ -408,7 +387,7 @@ func (b *adminBackend) BindIdentity(ctx context.Context, r adminapi.BindIdentity
 		if current.Generation != r.ExpectedGeneration {
 			return adminapi.ErrConflict
 		}
-		// Migrated keys retain their original identity; restoration requires explicit approval.
+		// Stored device keys retain their original identity; restoration requires explicit approval.
 		deviceID, lookupErr := s.store.DeviceKeyIdentity(ctx, r.Fingerprint)
 		if lookupErr == nil {
 			if deviceID != r.ClientID {
@@ -618,103 +597,4 @@ func (b *adminBackend) ListAdminActions(ctx context.Context, q adminapi.ListQuer
 		page.Items = append(page.Items, adminapi.AdminAction{ID: v.ID, Action: v.Action, TargetType: v.TargetType, TargetID: v.TargetID, Reason: v.Reason, Result: v.Result, Error: v.Error, Operator: v.Operator, TransportPeer: v.TransportPeer, SourceIP: v.SourceIP, CreatedAt: v.CreatedAt})
 	}
 	return page, nil
-}
-
-// 审计事件类型。
-// Audit event types.
-const (
-	auditConnect = "connect" // 连接建立并通过认证 / Connection established and authenticated.
-	// Connection established and authenticated.
-	auditDisconnect = "disconnect" // 连接断开 / Connection closed.
-	// Connection closed.
-	auditRegister = "register" // 控制通道握手成功 / Control-channel handshake succeeded.
-	// Control-channel handshake completed.
-	auditPublish = "publish" // 上报隧道列表 / Tunnel list published.
-	// Tunnel list published.
-	auditForward = "forward" // 经服务端转发一次连接 / One connection forwarded through the server.
-	// One connection forwarded through the server.
-	auditRejected = "rejected" // 认证或请求被拒 / Authentication or request rejected.
-	// Authentication or request rejected.
-)
-
-// auditEvent 是一条审计记录。
-// 字段刻意保持扁平：JSON Lines 的价值在于能被 grep 直接过滤，
-// 嵌套结构会让 `grep '"client_id":"abc"'` 这类用法失效。
-// auditEvent is deliberately flat so simple JSON Lines grep filters keep working.
-type auditEvent struct {
-	Time        time.Time `json:"time"`
-	Event       string    `json:"event"`
-	RemoteAddr  string    `json:"remote_addr,omitempty"`
-	User        string    `json:"user,omitempty"`
-	ClientID    string    `json:"client_id,omitempty"`
-	ClientName  string    `json:"client_name,omitempty"`
-	Role        string    `json:"role,omitempty"`
-	Version     string    `json:"version,omitempty"`
-	Fingerprint string    `json:"fingerprint,omitempty"`
-	// 转发相关
-	// Forwarding fields.
-	RemotePort int `json:"remote_port,omitempty"`
-	SrcPort    int `json:"src_port,omitempty"`
-	Tunnels    int `json:"tunnels,omitempty"`
-	// 拒绝原因
-	// Rejection reason.
-	Reason string `json:"reason,omitempty"`
-}
-
-// newAuditLog 打开审计日志文件。path 为空时返回一个禁用的实例。
-// newAuditLog opens the audit file or returns a disabled instance for an empty path.
-func newAuditLog(path string) (*auditLog, error) {
-	if path == "" {
-		return &auditLog{enabled: false}, nil
-	}
-
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("打开审计日志 %s: %w", path, err)
-	}
-	return &auditLog{f: f, enabled: true}, nil
-}
-
-// write 追加一条事件。
-// 立即落盘而不做缓冲：审计日志的价值在于事后追溯，进程被杀时丢失最近的记录
-// 恰恰会丢掉最关键的部分。事件频率很低（连接、断开、上报），开销可忽略。
-// write appends and immediately flushes an event so termination cannot lose the
-// most important recent audit records; event volume is low.
-func (a *auditLog) write(e auditEvent) {
-	if a == nil || !a.enabled {
-		return
-	}
-
-	e.Time = time.Now()
-
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	if a.f == nil {
-		return
-	}
-	data, err := json.Marshal(e)
-	if err != nil {
-		return
-	}
-	a.f.Write(append(data, '\n'))
-	a.f.Sync()
-}
-
-// Close 关闭审计日志。
-// Close closes the audit log.
-func (a *auditLog) Close() error {
-	if a == nil || !a.enabled {
-		return nil
-	}
-
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	if a.f == nil {
-		return nil
-	}
-	err := a.f.Close()
-	a.f = nil
-	return err
 }

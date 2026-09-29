@@ -24,11 +24,10 @@ for arch in amd64 arm64; do
   cp deploy/README.md deploy/README.en.md "$stage/deploy/"
   # Normalize scripts when building from a Windows checkout.
   sed 's/\r$//' deploy/install.sh > "$stage/install.sh"
-  sed 's/\r$//' deploy/upgrade.sh > "$stage/upgrade.sh"
-  chmod 755 "$stage/tunnel-server" "$stage/tunnelx-cli" "$stage/install.sh" "$stage/upgrade.sh"
+  chmod 755 "$stage/tunnel-server" "$stage/tunnelx-cli" "$stage/install.sh"
   printf 'Release: %s\nCLI/server: %s\nPlatform: linux/%s\n' "$tag" "$core_version" "$arch" > "$stage/VERSION.txt"
   tar -czf "$output/TunnelX-${tag#v}-linux-$arch.tar.gz" -C "$stage" \
-    tunnel-server tunnelx-cli install.sh upgrade.sh VERSION.txt \
+    tunnel-server tunnelx-cli install.sh VERSION.txt \
     README.md README.en.md ADMIN_LOGIN_GUIDE.md CLIENT_ACCESS_GUIDE.md deploy
 done
 

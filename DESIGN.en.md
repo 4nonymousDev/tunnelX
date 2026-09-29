@@ -2,7 +2,7 @@
 
 [中文](DESIGN.md)
 
-This document describes the current implementation. See [README](README.en.md) for usage, [BUILD](BUILD.en.md) for development, and [DEPLOY](DEPLOY.en.md) and the [upgrade guide](deploy/README.en.md#existing-installations-and-recovery) for deployment and migration.
+This document describes the current implementation. See [README](README.en.md) for usage, [BUILD](BUILD.en.md) for development, and [DEPLOY](DEPLOY.en.md) and the [installation guide](deploy/README.en.md#reinstallation-and-data-retention) for deployment and updates.
 
 ## Components
 
@@ -20,7 +20,7 @@ The server and CLI use pure Go builds. The desktop app bundles Electron and a se
 
 Clients use public-key authentication only. SSH password login and the enrollment channel are removed. Administrators submit the key and device ID together; business access requires a trusted binding. Existing keys, IDs and tunnel configuration are retained.
 
-Old account-device fingerprints migrate into an independent device_keys table with their original IDs and enabled state. Disabled, stale-generation, revoked or conflicting devices stay restricted and cannot fall back to an old authorized_keys entry. Blacklists remain independent. Manually registered devices use authorized_keys plus identity bindings. Administrator password changes affect only console sessions.
+Device authorizations in device_keys are independent of administrator accounts. Disabled, revoked or conflicting devices cannot fall back to an authorized_keys entry. Blacklists remain independent. Manually registered devices use authorized_keys plus identity bindings. Administrator password changes affect only console sessions.
 
 ## v2 routing and forwarding
 
@@ -30,17 +30,17 @@ Every business channel checks the target key, device ID, tunnel ID, current sess
 
 A client can import and export simultaneously. Request cancellation, channel closure, and reconnection have distinct lifecycles. A forward consumes capacity on both endpoints; an outstanding open retains its reservation until it actually finishes.
 
-Only the v2 business protocol is implemented. Compatibility preserves keys, IDs, configuration, and data. v1 programs must upgrade; existing v2 programs may keep connecting under their established authorization.
+The server and clients use one current business protocol. Replacing the program retains registered public keys, device IDs and data.
 
 ## Administrator authentication
 
-The first administrator is provisioned or recovered using the local server `-admin-account` command. It reads a hidden password from a terminal and must run while the service is stopped, as the original service user with the original data directory. Migration removes ordinary client accounts while retaining administrators. The console creates administrators and permits password resets and enabling/disabling.
+The first administrator is provisioned or recovered using the local server `-admin-account` command. It reads a hidden password from a terminal and must run while the service is stopped, as the original service user with the original data directory. The console creates administrators and permits password resets and enabling/disabling.
 
 The console uses account passwords to establish sessions. A random credential is placed in an HttpOnly, SameSite=Strict cookie; server memory indexes sessions by a hash of that credential. Reloading the page restores login through the session endpoint. HTTPS also sets Secure. HTTP administration requests are restricted to localhost or loopback hosts and are accessed through system SSH forwarding; proxy headers do not replace origin checks.
 
 Writes require both matching origin and a CSRF credential. Every protected request checks the account's current enabled state, administrator role, and credential generation. Event streams revalidate before writing. Logout, password reset, disabling invalidates previous access.
 
-Sessions last at most seven days and expire after twelve hours without management requests. An event stream alone does not extend that idle deadline. Limits are eight sessions per account and 256 globally. Restarting the server requires logging in again. Legacy management Bearer tokens no longer authenticate; their old startup option is accepted only to preserve service configuration compatibility.
+Sessions last at most seven days and expire after twelve hours without management requests. An event stream alone does not extend that idle deadline. Limits are eight sessions per account and 256 globally. Restarting the server requires logging in again.
 
 See the [administrator login guide](ADMIN_LOGIN_GUIDE.md) and [client access guide](CLIENT_ACCESS_GUIDE.md) for procedures.
 
@@ -53,17 +53,16 @@ See the [administrator login guide](ADMIN_LOGIN_GUIDE.md) and [client access gui
 - Administrative audit records identify the acting account. Critical persistence failures pause admission; uncertain commits require inspection and restart.
 - Database and WAL size, audit retention, and background queues have budgets. Host resource limits are still required.
 - Desktop locking and IPC authorization are checked in the main process; the renderer cannot directly access core credentials.
-- Windows releases support in-app updates for unsigned packages after user confirmation, retaining download hash checks. Builds with a configured signing publisher also verify Authenticode. Versions 0.2.2 / 0.2.3 need a one-time manual upgrade to 0.2.4.
+- Windows releases support in-app updates for unsigned packages after user confirmation, retaining download hash checks. Builds with a configured signing publisher also verify Authenticode.
 
 Device keys govern admission. Authorized devices still share visibility and access to published tunnels. This version does not implement isolation between devices or per-tunnel access controls; local business services should expose only the intended access scope.
 
 ## Data and upgrades
 
-Client configuration uses schema 2 and the server database uses schema 7. Migrations create backups and retain device keys, stable IDs, tunnel relationships, authorizations, and audit semantics rather than regenerating identities.
+Client configuration uses the current structure. The server maintains one current database layout: first startup creates tables, and subsequent startups retain existing records without historical migrations. The deployment script backs up the full data directory and keys before replacing the program.
 
-Identity bindings, device authorization, and administrative operations awaiting reconciliation remain persistent. Ordinary audit history is maintained under retention and space budgets. Rollback must restore matching program and database versions; an old program must not open an already migrated database.
+Identity bindings, device authorization, and administrative operations awaiting reconciliation remain persistent. Ordinary audit history is maintained under retention and space budgets. Recovery uses the program and complete database backup saved by the deployment script.
 
-The minimum-client-version policy is off by default and persists a minimum CLI version, fixed deadline and generation. Policy changes and audits commit together before refreshing the in-memory policy. Optional metadata in existing v2 handshake, registry and error messages preserves compatibility during the grace period. Handshake, publication and forwarding admission enforce the deadline; periodic checks close existing unsupported sessions. Self-reported versions do not replace identity or binary-integrity verification.
 
 ## Code map
 
@@ -73,11 +72,11 @@ The minimum-client-version policy is off by default and persists a minimum CLI v
 | [cmd/tunnelx-cli](cmd/tunnelx-cli) | CLI and key generation |
 | [internal/server](internal/server) | SSH admission, v2 control, forwarding, and management operations |
 | [internal/session](internal/session) | Online sessions and publications |
-| [internal/store](internal/store) | SQLite, migrations, accounts, identities, and audit |
+| [internal/store](internal/store) | SQLite initialization, accounts, identities, and audit |
 | [internal/adminapi](internal/adminapi) | Browser sessions, HTTP API, and embedded assets |
 | [internal/manager](internal/manager) | Client runtime and configuration management |
 | [internal/sshconn](internal/sshconn) | SSH establishment and host trust |
 | [desktop](desktop) | Electron main process, preload, and Vue interface |
 | [admin-web](admin-web) | Administration frontend |
 
-Automated tests cover identity conflicts, real SSH forwarding, revocation, resource limits, migrations, and storage failures. Build and deployment documents describe the checks. A successful cross-build does not replace business traffic and recovery validation in the target environment.
+Automated tests cover identity conflicts, real SSH forwarding, revocation, resource limits, data persistence, and storage failures. Build and deployment documents describe the checks. A successful cross-build does not replace business traffic and recovery validation in the target environment.

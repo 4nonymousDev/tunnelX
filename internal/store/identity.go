@@ -17,16 +17,6 @@ var (
 	ErrIdentityConflict = errors.New("device identity changed; reload before updating")
 )
 
-var schemaV3 = []string{
-	`CREATE TABLE identity_bindings(client_id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,generation INTEGER NOT NULL CHECK(generation>0),revoked INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL)`,
-	`CREATE INDEX identity_fingerprint ON identity_bindings(fingerprint)`,
-	`CREATE TABLE identity_claims(fingerprint TEXT NOT NULL,client_id TEXT NOT NULL,reported_name TEXT NOT NULL DEFAULT '',remote_ip TEXT NOT NULL DEFAULT '',last_seen_at INTEGER NOT NULL,PRIMARY KEY(fingerprint,client_id))`,
-	`CREATE INDEX identity_claim_time ON identity_claims(last_seen_at)`,
-	`CREATE TABLE rejection_counts(bucket_at INTEGER NOT NULL,reason TEXT NOT NULL,count INTEGER NOT NULL CHECK(count>=0),PRIMARY KEY(bucket_at,reason))`,
-	`CREATE TABLE admin_operations(id TEXT PRIMARY KEY,action TEXT NOT NULL,target_id TEXT NOT NULL,state TEXT NOT NULL,audit_id INTEGER NOT NULL REFERENCES admin_actions(id),created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL)`,
-	`CREATE INDEX admin_operation_state ON admin_operations(state,created_at)`,
-}
-
 type IdentityBinding struct {
 	ClientID    string    `json:"client_id"`
 	Fingerprint string    `json:"fingerprint"`
@@ -76,7 +66,7 @@ func (s *Store) ValidateIdentity(ctx context.Context, fp, id string) error {
 	if b.Fingerprint != fp {
 		return ErrIdentityMismatch
 	}
-	// A migrated authorization remains scoped to the exact enrolled device ID,
+	// A stored device authorization remains scoped to the exact enrolled device ID,
 	// even if another historical identity happens to reference the same key.
 	var originalID string
 	var enabled bool

@@ -7,9 +7,7 @@ export interface ImportEntryAvailability {
 }
 
 export function registryEntryKey(entry: RegistryDTO): string {
-  return entry.tunnel_id
-    ? `${entry.id}/${entry.tunnel_id}`
-    : `${entry.id}/legacy/${entry.source_port}`
+  return `${entry.id}/${entry.tunnel_id}`
 }
 
 export function availableImportEntries(snapshot?: SnapshotDTO): RegistryDTO[] {
@@ -26,28 +24,18 @@ export function classifyImportEntries(snapshot?: SnapshotDTO): ImportEntryAvaila
   if (!snapshot) return []
 
   const imports = (snapshot.tunnels ?? []).filter(item => item.config.kind === 'import')
-  const stable = new Set<string>()
-  const legacy = new Set<string>()
-  const importedPorts = new Set<string>()
-  for (const item of imports) {
-    const config = item.config
-    const portKey = peerPortKey(config.peer_id, config.peer_src_port)
-    importedPorts.add(portKey)
-    if (config.peer_tunnel_id) stable.add(`${config.peer_id}/${config.peer_tunnel_id}`)
-    else legacy.add(portKey)
-  }
+  const imported = new Set(imports.map(item => `${item.config.peer_id}/${item.config.peer_tunnel_id}`))
 
   return (snapshot.registry ?? [])
     .map((entry): ImportEntryAvailability => {
       if (entry.id === snapshot.id) {
         return { entry, available: false, reason: '这是本机导出的端口' }
       }
-      const portKey = peerPortKey(entry.id, entry.source_port)
-      if (entry.tunnel_id && stable.has(`${entry.id}/${entry.tunnel_id}`)) {
-        return { entry, available: false, reason: '已添加为导入隧道' }
+      if (!entry.tunnel_id) {
+        return { entry, available: false, reason: '目标缺少隧道 ID' }
       }
-      if (legacy.has(portKey) || (!entry.tunnel_id && importedPorts.has(portKey))) {
-        return { entry, available: false, reason: '已有相同对端和源端口的导入隧道' }
+      if (imported.has(registryEntryKey(entry))) {
+        return { entry, available: false, reason: '已添加为导入隧道' }
       }
       return { entry, available: true }
     })
@@ -72,10 +60,6 @@ export function allocateImportPort(preferred: number, usedPorts: Iterable<number
 
 export function importName(entry: RegistryDTO): string {
   return entry.tunnel_name || `${entry.name}:${entry.source_port}`
-}
-
-function peerPortKey(peerID?: string, sourcePort?: number): string {
-  return `${peerID ?? ''}/${sourcePort ?? 0}`
 }
 
 function compareRegistryEntries(left: RegistryDTO, right: RegistryDTO): number {

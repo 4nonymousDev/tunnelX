@@ -26,8 +26,8 @@ func (s *Server) acquire(visitorID string, target proto.Target) (*session.Lease,
 	}
 	var lease *session.Lease
 	admitted, err := s.policy.AdmitVersion(visitor.Fingerprint, version, func() error {
-		owner, ok := s.sessions.Get(target.SessionID)
-		if !ok || s.clientVersionBlocked(visitor.Version) || s.clientVersionBlocked(owner.Version) {
+		_, ok := s.sessions.Get(target.SessionID)
+		if !ok {
 			return session.ErrInvalidTarget
 		}
 		var e error

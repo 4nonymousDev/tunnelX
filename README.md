@@ -27,7 +27,7 @@
 - 导入侧绑定已核验的设备、公钥与隧道 ID，每次连接核对当前会话和发布版本。
 - 服务端不开放 shell，不接受任意服务器地址或端口转发。
 
-已有实例请先阅读 [安全升级操作说明](deploy/README.md#已有服务升级与恢复)。客户端使用设备公钥连接，管理员在「设备管理 → 登记设备」中一次提交公钥与设备 ID。管理后台仍使用管理员账号登录。原密钥、ID 和隧道配置保留；账号登记的有效设备自动迁移为独立授权，受限设备不会自动恢复。详见[客户端接入指南](CLIENT_ACCESS_GUIDE.md)。
+已有实例请先阅读 [安装与数据保留说明](deploy/README.md#重复安装与数据保留)。客户端使用设备公钥连接，管理员在「设备管理 → 登记设备」中一次提交公钥与设备 ID。管理后台仍使用管理员账号登录。当前结构数据库中的设备登记保持不变，原密钥、ID 和隧道配置继续使用。详见[客户端接入指南](CLIENT_ACCESS_GUIDE.md)。
 
 ## 快速开始
 
@@ -46,7 +46,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
   go build -ldflags "-s -w" -o tunnel-server-linux-amd64 ./cmd/tunnel-server
 
 # 上传并一键安装
-scp deploy/install.sh deploy/upgrade.sh tunnel-server-linux-amd64 user@your-server:~/
+scp deploy/install.sh tunnel-server-linux-amd64 user@your-server:~/
 ssh user@your-server 'chmod +x install.sh && sudo ./install.sh'
 ```
 
@@ -67,7 +67,7 @@ ssh -L 2223:127.0.0.1:2223 user@your-server
 
 ### 3. 管理员登记设备
 
-客户端使用设备公钥连接，管理员在「设备管理 → 登记设备」中一次提交公钥与设备 ID。管理后台仍使用管理员账号登录。原密钥、ID 和隧道配置保留；账号登记的有效设备自动迁移为独立授权，受限设备不会自动恢复。详见[客户端接入指南](CLIENT_ACCESS_GUIDE.md)。
+客户端使用设备公钥连接，管理员在「设备管理 → 登记设备」中一次提交公钥与设备 ID。管理后台仍使用管理员账号登录。当前结构数据库中的设备登记保持不变，原密钥、ID 和隧道配置继续使用。详见[客户端接入指南](CLIENT_ACCESS_GUIDE.md)。
 
 登记后保存设置并连接，首次连接时核对服务器指纹。私钥只留在本机；后台密码不提供给客户端。
 
@@ -86,7 +86,7 @@ ssh -L 2223:127.0.0.1:2223 user@your-server
 桌面端配置默认保存在 Electron `userData/config.json`，CLI 使用指定的配置文件。
 通常不需要手工编辑，但批量部署时直接分发配置文件更方便。
 
-客户端配置 schema 保持为 2；服务端数据库升级为 schema 7。迁移保留原身份、密钥和隧道，升级前先备份，见 [安全升级操作说明](deploy/README.md#已有服务升级与恢复)。
+客户端配置只使用当前结构；服务端只维护一套当前数据库结构，不提供历史版本迁移。当前结构的已有数据继续使用，升级前先备份，见 [安装与数据保留说明](deploy/README.md#重复安装与数据保留)。
 
 完整示例见 [config.example.json](config.example.json)，含每个字段的说明。
 
@@ -99,7 +99,6 @@ ssh -L 2223:127.0.0.1:2223 user@your-server
 | `server_addr` | `主机:端口`。端口是 tunnel-server 的（默认 2222），不是系统 sshd 的 22 |
 | `key_path` | 私钥路径。相对路径以配置文件所在目录为基准 |
 
-旧配置中的 `server_user` 会被忽略，连接始终使用 TunnelX 内部协议值。
 
 ### 导出隧道（把本机端口分享出去）
 
@@ -142,15 +141,14 @@ ssh -L 2223:127.0.0.1:2223 user@your-server
 | `peer_id` | 对端 `config.json` 里的 `id`。填错与对端离线的症状相同，但日志会列出注册表中实际可用的值供对照 |
 | `peer_tunnel_id` | 对端导出隧道的 `id`。与 `peer_id` 一起精确定位服务，因此可区分不同地址上的相同端口。建议通过「从在线列表添加」自动填写 |
 | `peer_name` | 仅供显示，对端改名不影响接入——匹配走的是 `peer_id + peer_tunnel_id` |
-| `peer_src_port` | 对端的 `local_port`，用于显示、默认本地端口，以及兼容没有 `peer_tunnel_id` 的旧配置；**不是服务端分配的端口** |
+| `peer_src_port` | 对端的 `local_port`，用于显示、默认本地端口；**不是服务端分配的端口** |
 | `listen_port` | 本机监听端口。可与 `peer_src_port` 不同（本机该端口可能已被占用）。Windows 上绑定 1024 以下端口需管理员权限 |
 
 > 手填 `peer_id` 容易出错，建议用界面的「从在线列表添加」自动填写。
 
 `enabled` 为 `false` 表示暂时停用：配置保留，但不建立隧道。
 
-旧导入配置没有 `peer_tunnel_id` 时，只在可信注册表中的 `peer_id + peer_src_port`
-唯一匹配后补齐目标；存在多个匹配时拒绝猜测。v1 程序需要升级到 v2。
+导入配置必须指定 `peer_tunnel_id`，按设备身份与隧道 ID 匹配。
 
 ## Linux CLI 客户端
 
@@ -277,7 +275,7 @@ tunnelx-cli 控制命令 ─┘          ▲
 | [BUILD.md](BUILD.md) | 构建说明、目录结构、测试、排查问题 |
 | [DEPLOY.md](DEPLOY.md) | 完整部署指南、密钥规划、防火墙、审计日志 |
 | [deploy/README.md](deploy/README.md) | 一键安装脚本用法 |
-| [CLIENT_ACCESS_GUIDE.md](CLIENT_ACCESS_GUIDE.md) | 公钥登记、设备迁移与原数据保留 |
+| [CLIENT_ACCESS_GUIDE.md](CLIENT_ACCESS_GUIDE.md) | 公钥登记与原数据保留 |
 
 ## 与同类工具的区别
 
@@ -306,7 +304,7 @@ SSH 传输加密和公钥验证由 `golang.org/x/crypto/ssh` 提供。客户端�
 
 - 服务端按设备、公钥、隧道 ID、会话和发布代际精确转发，不开中转端口或 shell
 - 拒绝任意服务器地址及旧式 TCP 端口转发
-- SSH 不接受密码认证；设备公钥必须获得管理员授权并绑定设备 ID，迁移设备保留原接入限制
+- SSH 不接受密码认证；设备公钥必须获得管理员授权并绑定设备 ID，已登记设备保留原接入限制
 - 管理 API 只允许监听明确的 loopback 地址，要求管理员账号登录；HttpOnly 会话 Cookie 保持登录，写操作校验来源和 CSRF，旧 Bearer Token 无效
 - 客户端在线状态只在内存；资料、黑名单和新审计写入纯 Go SQLite
 - 客户端会检查私钥权限：Windows 使用 ACL，Unix 使用文件权限位

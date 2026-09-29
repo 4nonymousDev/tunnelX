@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-func TestServerPreflightDoesNotProvisionOrMigrate(t *testing.T) {
+func TestServerPreflightDoesNotModifyData(t *testing.T) {
 	if os.Getenv("TUNNELX_TEST_SERVER_MAIN") == "1" {
 		for i, arg := range os.Args {
 			if arg == "--" {
@@ -33,8 +33,8 @@ func TestServerPreflightDoesNotProvisionOrMigrate(t *testing.T) {
 	}{{"version", []string{"-version"}, "tunnel-server"}, {"authorized-keys", []string{"-check-auth", "-auth", auth}, "authorized_keys: valid"}} {
 		t.Run(test.name, func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "must-not-exist")
-			args := append([]string{"-test.run=^TestServerPreflightDoesNotProvisionOrMigrate$", "--"}, test.args...)
-			args = append(args, "-data-dir", dir, "-admin-account", "admin", "-admin-token-file", "deprecated-missing-file")
+			args := append([]string{"-test.run=^TestServerPreflightDoesNotModifyData$", "--"}, test.args...)
+			args = append(args, "-data-dir", dir, "-admin-account", "admin")
 			cmd := exec.Command(os.Args[0], args...)
 			cmd.Env = append(os.Environ(), "TUNNELX_TEST_SERVER_MAIN=1")
 			output, err := cmd.CombinedOutput()

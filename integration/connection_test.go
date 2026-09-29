@@ -26,7 +26,6 @@ import (
 	"tunnelx/internal/keygen"
 	"tunnelx/internal/localapi"
 	"tunnelx/internal/store"
-	"tunnelx/internal/updatepolicy"
 )
 
 // This suite runs the real server and two CLI binaries as separate processes.
@@ -125,7 +124,7 @@ func TestServerAndCLIConnection(t *testing.T) {
 			t.Fatal(err)
 		}
 		adminJSON(t, admin, adminURL, "POST", "/clients/import-key", session.CSRF, map[string]any{"client_id": id, "public_key": string(publicKey), "reason": "connection smoke test"}, nil)
-		cfg := config.Config{KeyPath: key.KeyPath, SchemaVersion: 2, ID: id, Name: id, ServerAddr: sshAddr, Tunnels: []config.Tunnel{tunnel}}
+		cfg := config.Config{KeyPath: key.KeyPath, ID: id, Name: id, ServerAddr: sshAddr, Tunnels: []config.Tunnel{tunnel}}
 		body, _ := json.Marshal(cfg)
 		if err := os.WriteFile(cfgPath, body, 0600); err != nil {
 			t.Fatal(err)
@@ -181,46 +180,23 @@ func TestServerAndCLIConnection(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	var policy updatepolicy.Policy
-	adminJSON(t, admin, adminURL, "GET", "/client-update-policy", "", nil, &policy)
-	deadline := time.Now().Add(time.Hour)
-	setPolicy := func(minimum string, after *time.Time) {
-		adminJSON(t, admin, adminURL, "PUT", "/client-update-policy", session.CSRF, map[string]any{"minimum_version": minimum, "enforce_after": after, "expected_generation": policy.Generation, "reason": "smoke test"}, &policy)
-	}
-	setPolicy("999.0.0", &deadline)
-	waitFor(t, "grace notice", func() bool {
-		s, err := importer.Snapshot(ctx)
-		return err == nil && s.UpdatePolicy != nil && s.UpdatePolicy.Required && !s.UpdatePolicy.Blocked
-	})
-	if !checkTraffic() {
-		t.Fatal("grace period interrupted traffic")
-	}
-	deadline = time.Now().Add(-time.Second)
-	setPolicy("999.0.0", &deadline)
-	for _, c := range []*localapi.Client{exporter, importer} {
-		waitFor(t, "required-update disconnection", func() bool {
-			s, err := c.Snapshot(ctx)
-			return err == nil && s.Connection.State == "failed" && s.UpdatePolicy != nil && s.UpdatePolicy.Blocked
-		})
-	}
-	if checkTraffic() {
-		t.Fatal("expired clients still forwarded traffic")
-	}
-	setPolicy("", nil)
+	for _, c := range []*localapi.Client{importer, exporter} {
+ if err = c.Disconnect(ctx); err != nil { t.Fatal(err) }
+ }
 	if err = exporter.Connect(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if err = importer.Connect(ctx); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "traffic after policy cancellation", checkTraffic)
+	waitFor(t, "traffic after reconnect", checkTraffic)
 	for path, want := range before {
 		got, err := os.ReadFile(path)
 		if err != nil || !bytes.Equal(got, want) {
-			t.Fatalf("key/config changed after policy enforcement: %s", filepath.Base(path))
+			t.Fatalf("key/config changed after reconnect: %s", filepath.Base(path))
 		}
 	}
-	t.Log("grace, deadline enforcement, cancellation and preserved keys/config passed")
+	t.Log("reconnection and preserved keys/config passed")
 	for _, c := range []*localapi.Client{importer, exporter} {
 		if err = c.Shutdown(ctx); err != nil {
 			t.Fatal(err)

@@ -5,7 +5,7 @@ management REST API, and the management SPA. The tunnel endpoint listens on
 `:2222` by default; the management endpoint is forced to listen only on
 `127.0.0.1:2223`.
 
-For an existing public server, follow the [upgrade instructions](deploy/README.en.md#existing-installations-and-recovery). Clients authenticate with device public keys. Administrators register the key and device ID together under **Device management → Register device**. The console retains administrator password login. Existing keys, IDs and tunnels are preserved; valid account-enrolled devices migrate to independent key authorization, while restricted devices remain restricted. See the [client access guide](CLIENT_ACCESS_GUIDE.md).
+For an existing public server, follow the [installation instructions](deploy/README.en.md#reinstallation-and-data-retention). Clients authenticate with device public keys. Administrators register the key and device ID together under **Device management → Register device**. The console retains administrator password login. Device registrations in the current database layout are retained, along with existing keys, IDs and tunnels. See the [client access guide](CLIENT_ACCESS_GUIDE.md).
 
 ## Build
 
@@ -30,7 +30,7 @@ system SQLite installation.
 ## One-command installation
 
 ```bash
-scp deploy/install.sh deploy/upgrade.sh tunnel-server-linux-amd64 <user>@<server>:~/
+scp deploy/install.sh tunnel-server-linux-amd64 <user>@<server>:~/
 ssh <user>@<server>
 chmod +x install.sh
 sudo ./install.sh
@@ -45,9 +45,7 @@ The installer creates the `tunnel` nologin account and prepares:
 - a systemd service with `StateDirectory=tunnel-server`,
   `StateDirectoryMode=0700`, and `UMask=0077`.
 
-Administrator accounts live in the database and must be explicitly initialized below. Existing `admin.token` files remain untouched but no longer authenticate requests; new installations do not create tokens. The installer no longer
-creates JSONL or logrotate configuration. Upgrades also leave a legacy
-`/var/log/tunnel-server/audit.jsonl` file untouched.
+Administrator accounts live in the database and must be explicitly initialized below. Audits are stored in SQLite.
 
 ## Important systemd settings
 
@@ -72,7 +70,7 @@ PrivateDevices=true
 RestrictNamespaces=true
 ```
 
-The legacy `-audit` option is no longer part of the main flow. Online state is
+Online state is
 kept in memory, while client records, the blacklist, connection audits, access
 audits, and administrative actions are persisted in
 `/var/lib/tunnel-server/tunnel-server.db`.
@@ -87,7 +85,7 @@ rejects non-loopback listen addresses.
 ssh -L 2223:127.0.0.1:2223 <user>@<server>
 ```
 
-After installation or upgrading from tokens, create an administrator in the server's terminal. For custom deployments, use the actual service user and data directory:
+When the first installation has no administrator, create an administrator in the server's terminal. For custom deployments, use the actual service user and data directory:
 
 ```bash
 sudo systemctl stop tunnel-server
@@ -101,9 +99,9 @@ The password is entered privately at the terminal, never as a command-line argum
 
 Clients retain or generate a dedicated key in Connection settings. Administrators register the public key and device ID together under Device management. Verify the server fingerprint on first connection.
 
-Existing v2 clients retain their keys, IDs and configuration. Valid account-enrolled devices migrate into independent authorizations; disabled, revoked or stale-generation devices remain restricted. Administrator password changes do not affect devices. Block, revoke or restore devices through Device management. See the [client access guide](CLIENT_ACCESS_GUIDE.md).
+Clients retain their keys, IDs and configuration. Device authorizations in the current database layout are retained; disabled or revoked devices remain restricted. Administrator password changes do not affect devices. Block, revoke or restore devices through Device management. See the [client access guide](CLIENT_ACCESS_GUIDE.md).
 
-Manual authorized_keys edits affect only file authorization; they neither establish an identity binding nor change migrated database authorizations. Use console blocking or identity revocation to stop device access immediately.
+Manual authorized_keys edits affect only file authorization; they neither establish an identity binding nor change database device authorizations. Use console blocking or identity revocation to stop device access immediately.
 
 ## Operations
 
@@ -117,4 +115,4 @@ Before a backup, briefly stop the service and copy all of
 `/var/lib/tunnel-server`. Database timestamps are UTC Unix microseconds; the
 boundary for “rejected today” uses the server operating system's timezone.
 
-The current database is schema 7, including administrator accounts and independent device authorizations; client configuration remains schema 2. Recovery requires matching program and complete database backups. Version 1 clients must upgrade to v2, which routes to the exact exporter session and publication generation without relay ports. Unsupported authorization-file options or invalid contents fail closed. See the [upgrade instructions](deploy/README.en.md#existing-installations-and-recovery) and [deployment guide](deploy/README.en.md).
+The server maintains one current database layout, including administrator accounts and independent device authorizations, with no historical migrations; client configuration uses the current structure. Recovery requires matching program and complete database backups. Forwarding uses the exact exporter session and publication generation without relay ports. Unsupported authorization-file options or invalid contents fail closed. See the [installation instructions](deploy/README.en.md#reinstallation-and-data-retention) and [deployment guide](deploy/README.en.md).

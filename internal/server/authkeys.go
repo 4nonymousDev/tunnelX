@@ -221,7 +221,7 @@ func (a *authKeys) markUnhealthy() {
 
 const maxAuthorizedBytes = 1 << 20
 
-// CheckAuthorizedKeys validates an upgrade's input without opening/migrating a
+// CheckAuthorizedKeys validates the authorization file without opening a
 // database, starting listeners, or modifying authorization data.
 func CheckAuthorizedKeys(path string) error {
 	data, err := readAuthorizedFile(path)

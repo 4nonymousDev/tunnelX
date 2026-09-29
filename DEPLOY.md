@@ -5,7 +5,7 @@
 服务端是一个无 CGO 的单二进制，包含 SSH 隧道服务、管理 REST API 和管理 SPA。
 隧道端口默认 `:2222`；管理端强制只监听 `127.0.0.1:2223`。
 
-已有公网实例按 [安全升级操作说明](deploy/README.md#已有服务升级与恢复) 操作。客户端使用设备公钥连接，管理员在「设备管理 → 登记设备」中一次提交公钥与设备 ID。管理后台仍使用管理员账号登录。原密钥、ID 和隧道配置保留；账号登记的有效设备自动迁移为独立授权，受限设备不会自动恢复。详见[客户端接入指南](CLIENT_ACCESS_GUIDE.md)。
+已有公网实例按 [安装与数据保留说明](deploy/README.md#重复安装与数据保留) 操作。客户端使用设备公钥连接，管理员在「设备管理 → 登记设备」中一次提交公钥与设备 ID。管理后台仍使用管理员账号登录。当前结构数据库中的设备登记保持不变，原密钥、ID 和隧道配置继续使用。详见[客户端接入指南](CLIENT_ACCESS_GUIDE.md)。
 
 ## 构建
 
@@ -29,7 +29,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
 ## 一键安装
 
 ```bash
-scp deploy/install.sh deploy/upgrade.sh tunnel-server-linux-amd64 <user>@<server>:~/
+scp deploy/install.sh tunnel-server-linux-amd64 <user>@<server>:~/
 ssh <user>@<server>
 chmod +x install.sh
 sudo ./install.sh
@@ -42,8 +42,7 @@ sudo ./install.sh
 - `/var/lib/tunnel-server`，目录 `0700`，用于数据库、WAL 和 SHM；
 - 带 `StateDirectory=tunnel-server`、`StateDirectoryMode=0700`、`UMask=0077` 的 systemd 服务。
 
-管理账号保存在数据库中，首次安装需按下文创建。旧 `admin.token` 保留但不再参与认证；新安装不生成 Token。脚本不再
-创建 JSONL/logrotate 配置；升级也不会删除旧 `/var/log/tunnel-server/audit.jsonl`。
+管理账号保存在数据库中，首次安装需按下文创建。审计写入 SQLite。
 
 ## systemd 关键配置
 
@@ -74,7 +73,7 @@ TasksMax=256
 LimitNOFILE=4096
 ```
 
-旧 `-audit` 参数已退出主流程。在线状态只在内存，客户端资料、黑名单、连接审计、
+在线状态只在内存，客户端资料、黑名单、连接审计、
 访问审计和管理操作持久化在 `/var/lib/tunnel-server/tunnel-server.db`。
 
 ## 网络与管理访问
@@ -86,7 +85,7 @@ LimitNOFILE=4096
 ssh -L 2223:127.0.0.1:2223 <user>@<server>
 ```
 
-首次安装或从 Token 升级后，在服务器终端创建管理员（自定义部署替换实际服务用户和数据目录）：
+首次安装尚无管理员时，在服务器终端创建管理员（自定义部署替换实际服务用户和数据目录）：
 
 ```bash
 sudo systemctl stop tunnel-server
@@ -100,9 +99,9 @@ sudo systemctl start tunnel-server
 
 客户端在连接设置中保留或生成专用密钥，将公钥与设备 ID 交给管理员。管理员在「设备管理 → 登记设备」一次完成授权及身份绑定。首次连接核对服务器指纹。
 
-旧 v2 客户端继续使用原密钥、ID 和配置。账号登记的有效设备自动迁移为独立授权，已禁用、撤销或密码代次不匹配的设备保持受限。后台密码修改不影响设备；封禁、撤销和恢复在设备管理中操作。详见 [客户端接入指南](CLIENT_ACCESS_GUIDE.md)。
+客户端继续使用原密钥、ID 和配置。当前结构中的设备授权继续使用，已禁用或撤销的设备保持受限。后台密码修改不影响设备；封禁、撤销和恢复在设备管理中操作。详见 [客户端接入指南](CLIENT_ACCESS_GUIDE.md)。
 
-手工编辑 authorized_keys 只改变文件授权，不能替代设备 ID 登记，也不改变数据库中迁移设备的授权。立即停止设备访问应使用后台封禁或撤销身份。
+手工编辑 authorized_keys 只改变文件授权，不能替代设备 ID 登记，也不改变数据库中的设备授权。立即停止设备访问应使用后台封禁或撤销身份。
 
 ## 运维
 
@@ -115,5 +114,5 @@ sudo systemctl restart tunnel-server
 备份前建议短暂停止服务，复制整个 `/var/lib/tunnel-server`。数据库时间统一使用 UTC
 Unix 微秒整数；“今日拒绝”边界按服务器操作系统时区计算。
 
-服务端数据库当前为 schema 7，保存管理员账号、设备授权、身份和审计；客户端配置仍为 schema 2。
-升级和恢复须配套保留程序与完整数据库备份，按 [安全升级操作说明](deploy/README.md#已有服务升级与恢复) 操作。
+服务端只维护当前数据库结构，保存管理员账号、设备授权、身份和审计，不提供历史版本迁移；客户端配置只使用当前结构。
+升级和恢复须配套保留程序与完整数据库备份，按 [安装与数据保留说明](deploy/README.md#重复安装与数据保留) 操作。

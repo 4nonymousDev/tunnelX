@@ -191,17 +191,17 @@ func TestResolveTarget(t *testing.T) {
 	importer := dialClient(t, addr, keyPath, "importer-uuid", "笔记本", proto.RoleImporter)
 	waitRegistry(t, importer, 1)
 
-	target, err := importer.ResolveTarget("peer-uuid", "", "web", 80)
+	target, err := importer.ResolveTarget("peer-uuid", "", "web")
 	if err != nil || !target.Valid() || target.TunnelID != "web" {
 		t.Fatalf("解析目标: %+v, %v", target, err)
 	}
 
 	// 对端不存在时须报告 not ok，供隧道进入"对端离线"状态。
 	// A missing peer must report not-ok so the tunnel enters Peer Offline state.
-	if _, err := importer.ResolveTarget("nonexistent", "", "web", 80); err == nil {
+	if _, err := importer.ResolveTarget("nonexistent", "", "web"); err == nil {
 		t.Error("对不存在的对端应返回 ok=false")
 	}
-	if _, err := importer.ResolveTarget("peer-uuid", "", "nonexistent", 9999); err == nil {
+	if _, err := importer.ResolveTarget("peer-uuid", "", "nonexistent"); err == nil {
 		t.Error("对不存在的源端口应返回 ok=false")
 	}
 }
@@ -220,16 +220,16 @@ func TestPublishAndResolveSamePortByTunnelID(t *testing.T) {
 		t.Fatalf("相同源端口应保留两条注册记录: %+v", entries)
 	}
 
-	if target, err := importer.ResolveTarget("peer-uuid", "", "local-web", 80); err != nil || target.TunnelID != "local-web" {
+	if target, err := importer.ResolveTarget("peer-uuid", "", "local-web"); err != nil || target.TunnelID != "local-web" {
 		t.Fatalf("本机 Web 解析 = %+v, %v", target, err)
 	}
-	if target, err := importer.ResolveTarget("peer-uuid", "", "file-server", 80); err != nil || target.TunnelID != "file-server" {
+	if target, err := importer.ResolveTarget("peer-uuid", "", "file-server"); err != nil || target.TunnelID != "file-server" {
 		t.Fatalf("文件服务解析 = %+v, %v", target, err)
 	}
 
 	// 没有 peer_tunnel_id 的旧配置仍按源端口工作。
-	// Legacy configurations without peer_tunnel_id still resolve by source port.
-	if target, err := importer.ResolveTarget("peer-uuid", "", "", 80); err == nil {
+	// Missing tunnel IDs must not fall back to source-port matching.
+	if target, err := importer.ResolveTarget("peer-uuid", "", ""); err == nil {
 		t.Fatalf("歧义旧配置不应选择任意隧道: %+v", target)
 	}
 
@@ -239,10 +239,10 @@ func TestPublishAndResolveSamePortByTunnelID(t *testing.T) {
 	if wantRemaining[0].TunnelID != "file-server" {
 		t.Fatalf("注销一条隧道误删了另一条同端口隧道: %+v", wantRemaining)
 	}
-	if _, err := importer.ResolveTarget("peer-uuid", "", "local-web", 80); err == nil {
+	if _, err := importer.ResolveTarget("peer-uuid", "", "local-web"); err == nil {
 		t.Fatal("已注销的隧道仍能解析")
 	}
-	if target, err := importer.ResolveTarget("peer-uuid", "", "file-server", 80); err != nil || target.TunnelID != "file-server" {
+	if target, err := importer.ResolveTarget("peer-uuid", "", "file-server"); err != nil || target.TunnelID != "file-server" {
 		t.Fatalf("剩余同端口隧道解析 = %+v, %v", target, err)
 	}
 }
@@ -319,7 +319,7 @@ func TestPeerOfflineRemovesEntry(t *testing.T) {
 	peer.Publish()
 
 	waitRegistry(t, importer, 1)
-	if _, err := importer.ResolveTarget("peer-uuid", "", "web", 80); err != nil {
+	if _, err := importer.ResolveTarget("peer-uuid", "", "web"); err != nil {
 		t.Fatal("对端上线后应能解析到端口")
 	}
 
@@ -329,7 +329,7 @@ func TestPeerOfflineRemovesEntry(t *testing.T) {
 	peerConn.Close()
 
 	waitRegistry(t, importer, 0)
-	if _, err := importer.ResolveTarget("peer-uuid", "", "web", 80); err == nil {
+	if _, err := importer.ResolveTarget("peer-uuid", "", "web"); err == nil {
 		t.Error("对端下线后不应再解析到端口")
 	}
 }

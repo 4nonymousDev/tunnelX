@@ -5,10 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 const accountTestPassword = "correct horse battery staple"
@@ -59,61 +57,6 @@ func TestAccountCapacityAndAtomicAuditRollback(t *testing.T) {
 	if _, err := s.CreateAccount(ctx, "over-capacity", accountTestPassword, 10, AdminAction{}); !errors.Is(err, ErrAccountLimit) {
 		t.Fatalf("account capacity=%v", err)
 	}
-}
-
-func TestAccountMigrationPreservesV3AndCreatesConsistentBackup(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "v3.db")
-	s, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx := context.Background()
-	fp := securityFingerprint("v3-identity")
-	if _, err = s.BindIdentity(ctx, "original-id", fp, 0, AdminAction{}); err != nil {
-		t.Fatal(err)
-	}
-	if err = s.ImportClient(ctx, fp, "original user", "", "", time.Unix(1, 0)); err != nil {
-		t.Fatal(err)
-	}
-	if err = s.Block(ctx, BlockRequest{Entry: BlacklistEntry{Fingerprint: fp, Reason: "keep"}}); err != nil {
-		t.Fatal(err)
-	}
-	for _, q := range []string{`DROP TABLE client_update_policy`, `DROP TABLE device_keys`, `DROP TABLE accounts`, `PRAGMA user_version=3`} {
-		if _, err = s.db.Exec(q); err != nil {
-			t.Fatal(err)
-		}
-	}
-	s.Close()
-	s, err = Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	if s.BackupPath() == "" {
-		t.Fatal("no v3 recovery backup")
-	}
-	backup, err := sql.Open("sqlite", s.BackupPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer backup.Close()
-	var version int
-	if err = backup.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 3 {
-		t.Fatalf("backup=%d %v", version, err)
-	}
-	if err = s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != schemaVersion {
-		t.Fatalf("migrated=%d %v", version, err)
-	}
-	if err = s.ValidateIdentity(ctx, fp, "original-id"); err != nil {
-		t.Fatal(err)
-	}
-	if blocked, err := s.IsBlocked(ctx, fp, time.Now()); err != nil || !blocked {
-		t.Fatal("block lost")
-	}
-	if c, err := s.GetClient(ctx, fp); err != nil || c.Username != "original user" {
-		t.Fatal("metadata lost")
-	}
-	createTestAccount(t, s, "after-upgrade", 10)
 }
 
 func TestAccountUsernameValidation(t *testing.T) {

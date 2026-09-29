@@ -28,9 +28,6 @@ func (s *Server) serveControl(sid string, conn *ssh.ServerConn, ch ssh.Channel, 
 		if s.pushRegistry(sid, conn, pc) != nil {
 			return
 		}
-		ticker := time.NewTicker(time.Second)
-		defer ticker.Stop()
-		var lastGeneration int64
 		for {
 			select {
 			case <-done:
@@ -38,21 +35,6 @@ func (s *Server) serveControl(sid string, conn *ssh.ServerConn, ch ssh.Channel, 
 			case <-updates:
 				if s.pushRegistry(sid, conn, pc) != nil {
 					return
-				}
-			case <-ticker.C:
-				current, ok := s.sessions.Get(sid)
-				if !ok {
-					return
-				}
-				if s.rejectClientVersion(conn, pc, current.Version) {
-					s.sessions.Disconnect(sid, "update_required")
-					return
-				}
-				if p := s.clientUpdates.Load(); p != nil && p.Generation != lastGeneration {
-					lastGeneration = p.Generation
-					if s.pushRegistry(sid, conn, pc) != nil {
-						return
-					}
 				}
 			}
 		}
@@ -97,9 +79,6 @@ func (s *Server) serveControl(sid string, conn *ssh.ServerConn, ch ssh.Channel, 
 		}
 		var closeStale func()
 		admitted, err := s.policy.AdmitVersion(current.Fingerprint, version, func() error {
-			if s.clientVersionBlocked(current.Version) {
-				return errors.New("client update required")
-			}
 			var e error
 			closeStale, e = s.sessions.PublishDeferred(sid, tunnels)
 			return e
@@ -111,10 +90,6 @@ func (s *Server) serveControl(sid string, conn *ssh.ServerConn, ch ssh.Channel, 
 			return
 		}
 		if err != nil {
-			if s.rejectClientVersion(conn, pc, current.Version) {
-				s.sessions.Disconnect(sid, proto.CodeUpdateRequired)
-				return
-			}
 			code := proto.CodeBadRequest
 			if errors.Is(err, session.ErrCapacity) {
 				code = proto.CodeRegistryCapacity
@@ -157,13 +132,9 @@ func (s *Server) sendErr(conn *ssh.ServerConn, pc *proto.Conn, code, msg string)
 	_ = s.sendControl(conn, pc, proto.Error{V: proto.Version, Type: proto.TypeError, Code: code, Msg: msg})
 }
 func (s *Server) pushRegistry(sid string, conn *ssh.ServerConn, pc *proto.Conn) error {
-	current, ok := s.sessions.Get(sid)
+	_, ok := s.sessions.Get(sid)
 	if !ok {
 		return errors.New("session closed")
 	}
-	if s.rejectClientVersion(conn, pc, current.Version) {
-		s.sessions.Disconnect(sid, proto.CodeUpdateRequired)
-		return errors.New("client update required")
-	}
-	return s.sendControl(conn, pc, proto.Registry{V: proto.Version, Type: proto.TypeRegistry, Entries: s.sessions.RegistrySnapshot(), UpdatePolicy: s.clientUpdateStatus(current.Version)})
+	return s.sendControl(conn, pc, proto.Registry{V: proto.Version, Type: proto.TypeRegistry, Entries: s.sessions.RegistrySnapshot()})
 }

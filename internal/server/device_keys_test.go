@@ -12,7 +12,7 @@ import (
 	"tunnelx/internal/store"
 )
 
-func TestMigratedKeyConnectsWithoutPublicKeyFileEntry(t *testing.T) {
+func TestStoredDeviceKeyConnectsWithoutPublicKeyFileEntry(t *testing.T) {
 	s, addr, path := startServerInstance(t, func(c *Config) {
 		c.DataDir = t.TempDir()
 		if err := os.WriteFile(c.AuthorizedKeys, nil, 0600); err != nil {
@@ -23,15 +23,15 @@ func TestMigratedKeyConnectsWithoutPublicKeyFileEntry(t *testing.T) {
 	if s.auth.AuthorizedFingerprint(fp) {
 		t.Fatal("fixture already authorized by file")
 	}
-	if _, err := s.store.DB().Exec(`INSERT INTO device_keys VALUES(?,'migrated-device',0)`, fp); err != nil {
+	if _, err := s.store.DB().Exec(`INSERT INTO device_keys VALUES(?,'stored-device',0)`, fp); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := (*adminBackend)(s).BindIdentity(context.Background(), adminapi.BindIdentityRequest{ClientID: "migrated-device", Fingerprint: fp, Reason: "migration fixture"}); err != nil {
+	if _, err := (*adminBackend)(s).BindIdentity(context.Background(), adminapi.BindIdentityRequest{ClientID: "stored-device", Fingerprint: fp, Reason: "device fixture"}); err != nil {
 		t.Fatal(err)
 	}
 	client := dialWith(t, addr, path)
 	defer client.Close()
-	_, control := openTestControl(t, client, proto.RoleImporter, "migrated-device")
+	_, control := openTestControl(t, client, proto.RoleImporter, "stored-device")
 	defer control.Close()
 }
 
@@ -51,17 +51,17 @@ func TestAdministratorPasswordCannotAuthenticateSSH(t *testing.T) {
 	}
 }
 
-func TestMigratedKeyOverridesFileAndIsIndependentOfAdminAccount(t *testing.T) {
+func TestStoredDeviceKeyOverridesFileAndIsIndependentOfAdminAccount(t *testing.T) {
 	s, _, path := startServerInstance(t, func(c *Config) { c.DataDir = t.TempDir() })
 	fp := ssh.FingerprintSHA256(loadSigner(t, path).PublicKey())
 	ctx := context.Background()
-	if _, err := s.store.DB().Exec(`INSERT INTO device_keys VALUES(?,'migrated-device',0)`, fp); err != nil {
+	if _, err := s.store.DB().Exec(`INSERT INTO device_keys VALUES(?,'stored-device',0)`, fp); err != nil {
 		t.Fatal(err)
 	}
 	if s.fingerprintAuthorized(fp) {
 		t.Fatal("disabled device fell back to authorized_keys")
 	}
-	if _, err := (*adminBackend)(s).BindIdentity(ctx, adminapi.BindIdentityRequest{ClientID: "migrated-device", Fingerprint: fp, Reason: "explicit recovery"}); err != nil {
+	if _, err := (*adminBackend)(s).BindIdentity(ctx, adminapi.BindIdentityRequest{ClientID: "stored-device", Fingerprint: fp, Reason: "explicit recovery"}); err != nil {
 		t.Fatal(err)
 	}
 	if !s.fingerprintAuthorized(fp) {
@@ -77,7 +77,7 @@ func TestMigratedKeyOverridesFileAndIsIndependentOfAdminAccount(t *testing.T) {
 	if !s.fingerprintAuthorized(fp) {
 		t.Fatal("administrator reset changed device authorization")
 	}
-	if err = (*adminBackend)(s).RevokeIdentity(ctx, "migrated-device", 1, "revoke"); err != nil {
+	if err = (*adminBackend)(s).RevokeIdentity(ctx, "stored-device", 1, "revoke"); err != nil {
 		t.Fatal(err)
 	}
 	if s.fingerprintAuthorized(fp) {

@@ -10,7 +10,6 @@ package proto
 import (
 	"fmt"
 	"time"
-	"tunnelx/internal/updatepolicy"
 )
 
 // ChannelType 是控制通道的 SSH channel 类型名。
@@ -89,12 +88,11 @@ type Hello struct {
 // HelloOK 是握手成功响应（S→C）。
 // HelloOK is the successful handshake response (server to client).
 type HelloOK struct {
-	UpdatePolicy  *updatepolicy.Status `json:"update_policy,omitempty"`
-	V             int                  `json:"v"`
-	Type          string               `json:"type"`
-	ServerVersion string               `json:"server_version"`
-	SessionID     string               `json:"session_id"`
-	Fingerprint   string               `json:"fingerprint"`
+	V             int    `json:"v"`
+	Type          string `json:"type"`
+	ServerVersion string `json:"server_version"`
+	SessionID     string `json:"session_id"`
+	Fingerprint   string `json:"fingerprint"`
 }
 
 // TunnelSpec 是 Exporter 上报的单条隧道。
@@ -135,7 +133,7 @@ type RegistryEntry struct {
 	Name             string    `json:"name"`                // 机器显示名 / Machine display name.
 	TunnelID         string    `json:"tunnel_id,omitempty"` // 导出隧道稳定 ID / Stable exported-tunnel ID.
 	SrcHost          string    `json:"src_host,omitempty"`  // Exporter 的目标地址 / Exporter's target address.
-	SrcPort          int       `json:"src_port"`            // 显示、Importer 默认值与旧配置兼容匹配 / Display, importer default, and legacy match port.
+	SrcPort          int       `json:"src_port"`            // 显示与 Importer 默认端口 / Display and importer default port.
 	RemotePort       int       `json:"remote_port"`         // Deprecated display field; always zero in v2.
 	TunnelName       string    `json:"tunnel_name"`         // 显示用，可为空 / Optional display name.
 	Since            time.Time `json:"since"`               // 上线时间 / Time connected.
@@ -155,10 +153,9 @@ func (e RegistryEntry) Target() Target {
 // Because importers do not report which peer they use, the server broadcasts and each
 // importer checks whether its target UUID remains present.
 type Registry struct {
-	UpdatePolicy *updatepolicy.Status `json:"update_policy,omitempty"`
-	V            int                  `json:"v"`
-	Type         string               `json:"type"`
-	Entries      []RegistryEntry      `json:"entries"`
+	V       int             `json:"v"`
+	Type    string          `json:"type"`
+	Entries []RegistryEntry `json:"entries"`
 }
 
 // Error 是错误响应（S→C）。
@@ -173,11 +170,10 @@ type Registry struct {
 // implements the error interface so errors.As can recover it through %w wrapping and
 // classification can trust the server-provided Code directly.
 type Error struct {
-	UpdatePolicy *updatepolicy.Status `json:"update_policy,omitempty"`
-	V            int                  `json:"v"`
-	Type         string               `json:"type"`
-	Code         string               `json:"code"`
-	Msg          string               `json:"msg"`
+	V    int    `json:"v"`
+	Type string `json:"type"`
+	Code string `json:"code"`
+	Msg  string `json:"msg"`
 }
 
 func (e *Error) Error() string {
@@ -192,8 +188,7 @@ func (e *Error) Error() string {
 // port-allocation failure and server busy are retryable; bad request indicates a
 // client bug and is not recoverable; internal errors are retryable.
 const (
-	CodeVersionMismatch    = "version_mismatch" // 不可自愈：提示用户升级 / Unrecoverable: ask the user to upgrade.
-	CodeUpdateRequired     = "update_required"
+	CodeVersionMismatch    = "version_mismatch"  // 不可自愈：提示用户升级 / Unrecoverable: ask the user to upgrade.
 	CodeDuplicateID        = "duplicate_id"      // 不可自愈：UUID 已被占用 / Unrecoverable: UUID already in use.
 	CodePortAllocFailed    = "port_alloc_failed" // 可自愈：退避重试 / Recoverable: retry with backoff.
 	CodeServerBusy         = "server_busy"       // 可自愈：退避重试 / Recoverable: retry with backoff.

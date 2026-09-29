@@ -16,8 +16,8 @@ import (
 )
 
 func TestReplaceIdentityKey(t *testing.T) {
-	for _, migrated := range []bool{false, true} {
-		t.Run(map[bool]string{false: "file_authorized", true: "migrated_device"}[migrated], func(t *testing.T) {
+	for _, stored := range []bool{false, true} {
+		t.Run(map[bool]string{false: "file_authorized", true: "stored_device"}[stored], func(t *testing.T) {
 			cfg := managementConfig(t)
 			s, err := New(cfg, nil)
 			if err != nil {
@@ -34,7 +34,7 @@ func TestReplaceIdentityKey(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if migrated {
+			if stored {
 				if _, err = s.store.DB().Exec(`INSERT INTO device_keys(fingerprint,client_id,enabled) VALUES(?,?,1)`, registered.Fingerprint, "same-device"); err != nil {
 					t.Fatal(err)
 				}
@@ -167,7 +167,7 @@ func TestReplacementRejectsInvalidInputBeforeAuthorization(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err = b.BindIdentity(ctx, base); !errors.Is(err, adminapi.ErrConflict) {
-		t.Fatalf("migrated ownership changed: %v", err)
+		t.Fatalf("device ownership changed: %v", err)
 	}
 	after, err := os.ReadFile(cfg.AuthorizedKeys)
 	if err != nil || string(after) != string(original) {

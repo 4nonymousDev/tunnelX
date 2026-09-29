@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"net"
 	"os"
 	"strings"
 	"testing"
@@ -119,12 +120,18 @@ func TestRemoveTunnelsEmptyIsNoop(t *testing.T) {
 // Partial success would force users to identify missing selections manually; rejecting
 // the batch with a reason is clearer.
 func TestAddTunnelsAllOrNothing(t *testing.T) {
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
 	m, path := newTestManager(t)
 
-	err := m.AddTunnels([]config.Tunnel{
+	err = m.AddTunnels([]config.Tunnel{
 		{
 			Kind: config.KindImport, Name: "好的", Enabled: true,
-			PeerID: "peer-1", PeerSrcPort: 80, ListenPort: 18080,
+			PeerID: "peer-1", PeerSrcPort: 80, ListenPort: port,
 		},
 		{
 			Kind: config.KindImport, Name: "坏的", Enabled: true,

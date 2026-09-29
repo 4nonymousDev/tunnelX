@@ -136,7 +136,6 @@ desktop/
   src/renderer/      Vue 3 界面
 deploy/
   install.sh         新安装入口，已有实例转入升级脚本
-  upgrade.sh         保留现有启动参数、密钥和数据的升级脚本
 ```
 
 两层重连的职责划分体现在包边界上：`manager` 负责 SSH 连接本身的断线

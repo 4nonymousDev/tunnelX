@@ -33,7 +33,6 @@ func main() {
 	flag.StringVar(&cfg.HostKeyPath, "hostkey", "host_key", "服务端主机密钥路径")
 	flag.StringVar(&cfg.AuthorizedKeys, "auth", "authorized_keys", "授权公钥文件路径")
 	flag.StringVar(&cfg.AdminAddr, "admin-addr", "127.0.0.1:2223", "管理端监听地址（仅允许明确的 loopback IP）")
-	flag.StringVar(&cfg.AdminTokenFile, "admin-token-file", "", "已弃用并忽略；管理端改用管理员账号登录")
 	flag.StringVar(&cfg.DataDir, "data-dir", "data", "SQLite 数据目录")
 	flag.DurationVar(&cfg.HandshakeTimeout, "handshake-timeout", 10*time.Second, "SSH 握手最长耗时")
 	flag.DurationVar(&cfg.OpenTimeout, "open-timeout", 10*time.Second, "等待导出端接受转发的最长耗时")
@@ -47,11 +46,11 @@ func main() {
 	flag.IntVar(&cfg.Limits.ChannelsPerSession, "max-channels-per-session", 32, "每个会话的业务通道上限")
 	flag.IntVar(&cfg.Limits.ChannelsTotal, "max-channels", 256, "全部业务通道上限（一次转发占用两端各一个）")
 	showVersion := flag.Bool("version", false, "显示版本后退出")
-	checkAuth := flag.Bool("check-auth", false, "只校验授权公钥文件，成功后退出，不监听或迁移数据库")
+	checkAuth := flag.Bool("check-auth", false, "只校验授权公钥文件，成功后退出，不监听或打开数据库")
 	adminAccount := flag.String("admin-account", "", "先停止服务，再创建或重设指定管理员账号后退出（交互输入密码）")
 	flag.Parse()
 	// In particular, reject a trailing "-- -version". Otherwise an upgrade
-	// preflight can accidentally start the real server and migrate its database.
+	// preflight can accidentally start the real server and open its database.
 	if flag.NArg() != 0 {
 		fmt.Fprintln(os.Stderr, "不接受位置参数；请使用明确的命令行选项")
 		os.Exit(2)

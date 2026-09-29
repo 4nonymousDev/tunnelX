@@ -19,13 +19,11 @@ import (
 	"tunnelx/internal/proto"
 	"tunnelx/internal/session"
 	"tunnelx/internal/store"
-	"tunnelx/internal/updatepolicy"
 )
 
 type Config struct {
 	Addr, HostKeyPath, AuthorizedKeys, Version  string
-	AdminAddr, AdminTokenFile, DataDir          string
-	AuditPath                                   string // legacy only; ignored when DataDir is set
+	AdminAddr, DataDir                          string
 	HelloTimeout                                time.Duration
 	HandshakeTimeout, WriteTimeout, OpenTimeout time.Duration
 	Limits                                      Limits
@@ -37,7 +35,6 @@ type Server struct {
 	sshCfg                  *ssh.ServerConfig
 	logf                    func(string, ...any)
 	auth                    *authKeys
-	audit                   *auditLog
 	sessions                *session.Manager
 	store                   *store.Store
 	policy                  *policy.Policy
@@ -58,7 +55,6 @@ type Server struct {
 	auditJobs               chan func(context.Context)
 	auditStop               chan struct{}
 	auditDone               chan struct{}
-	clientUpdates           atomic.Pointer[updatepolicy.Policy]
 }
 
 func New(cfg Config, logf func(string, ...any)) (*Server, error) {
@@ -113,23 +109,8 @@ func New(cfg Config, logf func(string, ...any)) (*Server, error) {
 			blocks = append(blocks, policy.Block{Fingerprint: b.Fingerprint, Reason: b.Reason, Operator: b.Operator, CreatedAt: b.CreatedAt, ExpiresAt: b.ExpiresAt})
 		}
 		s.policy = policy.New(blocks)
-		updatePolicy, e := s.store.GetClientUpdatePolicy(context.Background())
-		if e != nil {
-			s.store.Close()
-			return nil, e
-		}
-		s.clientUpdates.Store(&updatePolicy)
 	} else {
 		s.policy = policy.New(nil)
-	}
-	legacy := ""
-	if cfg.DataDir == "" {
-		legacy = cfg.AuditPath
-	}
-	s.audit, err = newAuditLog(legacy)
-	if err != nil {
-		s.cleanupNew()
-		return nil, err
 	}
 	s.sessions = session.NewWithLimits(s.onSessionRemoved, cfg.Limits.sessions())
 	s.requestRates = make(map[*ssh.ServerConn]*rateBucket)
@@ -169,9 +150,6 @@ func New(cfg Config, logf func(string, ...any)) (*Server, error) {
 }
 
 func (s *Server) cleanupNew() {
-	if s.audit != nil {
-		_ = s.audit.Close()
-	}
 	if s.store != nil {
 		_ = s.store.Close()
 	}
@@ -274,9 +252,6 @@ func (s *Server) Close() error {
 		s.wg.Wait()
 		close(s.auditStop)
 		<-s.auditDone
-		if s.audit != nil {
-			_ = s.audit.Close()
-		}
 		if s.store != nil {
 			s.closeErr = s.store.Close()
 		}
@@ -368,7 +343,6 @@ func (s *Server) handleAdmitted(raw net.Conn, finish, release func()) {
 		}
 	}
 	s.startHelloTimer(sess.ID)
-	s.audit.write(auditEvent{Event: auditConnect, RemoteAddr: remote, User: sshConn.User(), Fingerprint: fp})
 	var channels sync.WaitGroup
 	channels.Add(1)
 	go func() { defer channels.Done(); s.discardRequests(sshConn, reqs, rate) }()

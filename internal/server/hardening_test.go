@@ -1,15 +1,12 @@
 package server
 
 import (
-	"bufio"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"encoding/json"
 	"encoding/pem"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -116,7 +113,7 @@ func TestAuthKeysFailsClosedOnError(t *testing.T) {
 // TestAuditLogRecordsSession verifies historical session and forwarding events independently of live state.
 func TestAuditLogRecordsSession(t *testing.T) {
 	cfg := managementConfig(t)
-	cfg.AdminAddr, cfg.AdminTokenFile = "", ""
+	cfg.AdminAddr = ""
 	srv, err := New(cfg, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -159,48 +156,6 @@ func TestAuditLogRecordsSession(t *testing.T) {
 	if err != nil || rejected < 1 {
 		t.Fatalf("rejection aggregate missing: %d %v", rejected, err)
 	}
-}
-
-// TestAuditDisabledByDefault 验证未配置路径时不产生文件且不影响运行。
-// TestAuditDisabledByDefault verifies that no path means no file and no runtime impact.
-func TestAuditDisabledByDefault(t *testing.T) {
-	a, err := newAuditLog("")
-	if err != nil {
-		t.Fatalf("创建禁用的审计日志: %v", err)
-	}
-
-	// 不应 panic。
-	// Must not panic.
-	a.write(auditEvent{Event: auditConnect, RemoteAddr: "1.2.3.4"})
-	if err := a.Close(); err != nil {
-		t.Errorf("关闭禁用的审计日志应返回 nil, 得到 %v", err)
-	}
-}
-
-func readAudit(t *testing.T, path string) []auditEvent {
-	t.Helper()
-
-	f, err := os.Open(path)
-	if err != nil {
-		t.Fatalf("打开审计日志: %v", err)
-	}
-	defer f.Close()
-
-	var out []auditEvent
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
-			continue
-		}
-		var e auditEvent
-		if err := json.Unmarshal([]byte(line), &e); err != nil {
-			t.Errorf("审计日志行不是有效 JSON: %s", line)
-			continue
-		}
-		out = append(out, e)
-	}
-	return out
 }
 
 func genPEMKey(t *testing.T, path string) []byte {

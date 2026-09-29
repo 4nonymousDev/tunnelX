@@ -6,18 +6,8 @@ import (
 	"errors"
 )
 
-// Account enrollment stored fingerprints rather than public-key text. Keep those
-// authorizations independently of administrators, including denied keys so an
-// old authorized_keys entry cannot accidentally reactivate a disabled device.
-var schemaV7 = []string{
-	`CREATE TABLE device_keys(fingerprint TEXT PRIMARY KEY,client_id TEXT NOT NULL UNIQUE,enabled INTEGER NOT NULL CHECK(enabled IN (0,1)))`,
-	`INSERT INTO device_keys(fingerprint,client_id,enabled)
-	 SELECT d.fingerprint,d.client_id,COALESCE(a.enabled=1 AND a.generation=d.generation AND i.fingerprint=d.fingerprint AND i.revoked=0,0)
-	 FROM account_devices d LEFT JOIN accounts a ON a.username=d.username LEFT JOIN identity_bindings i ON i.client_id=d.client_id`,
-	`DROP TABLE account_devices`,
-	`DELETE FROM accounts WHERE is_admin=0`,
-}
-
+// Device authorizations are independent of administrators. Denied keys must not
+// fall back to an authorized_keys entry.
 func (s *Store) DeviceKeyStatus(ctx context.Context, fp string) (known, allowed bool, err error) {
 	if s.commitUncertain.Load() {
 		return false, false, ErrCommitOutcomeUnknown

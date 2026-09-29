@@ -13,7 +13,6 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 7
 const microsPerSecond = int64(time.Second / time.Microsecond)
 
 func openDatabase(path string) (*sql.DB, error) {
@@ -31,105 +30,6 @@ func openDatabase(path string) (*sql.DB, error) {
 	return db, nil
 }
 func (s *Store) DB() *sql.DB { return s.db }
-
-func (s *Store) migrate(ctx context.Context) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	var v int
-	if err = tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&v); err != nil {
-		return err
-	}
-	if v > schemaVersion {
-		return fmt.Errorf("database schema version %d is newer than supported %d", v, schemaVersion)
-	}
-	if v < 1 {
-		for _, q := range schemaV1 {
-			if _, err = tx.ExecContext(ctx, q); err != nil {
-				return fmt.Errorf("migrate schema v1: %w", err)
-			}
-		}
-		if _, err = tx.ExecContext(ctx, "PRAGMA user_version = 1"); err != nil {
-			return err
-		}
-	}
-	if v < 2 {
-		for _, q := range []string{
-			"ALTER TABLE clients ADD COLUMN username TEXT NOT NULL DEFAULT ''",
-			"ALTER TABLE clients ADD COLUMN email TEXT NOT NULL DEFAULT ''",
-			"ALTER TABLE clients ADD COLUMN computer_name TEXT NOT NULL DEFAULT ''",
-		} {
-			if _, err = tx.ExecContext(ctx, q); err != nil {
-				return fmt.Errorf("migrate schema v2: %w", err)
-			}
-		}
-		if _, err = tx.ExecContext(ctx, "PRAGMA user_version = 2"); err != nil {
-			return err
-		}
-	}
-	if v < 3 {
-		for _, q := range schemaV3 {
-			if _, err = tx.ExecContext(ctx, q); err != nil {
-				return fmt.Errorf("migrate schema v3: %w", err)
-			}
-		}
-		if _, err = tx.ExecContext(ctx, "PRAGMA user_version = 3"); err != nil {
-			return err
-		}
-	}
-	if v < 4 {
-		for _, q := range schemaV4 {
-			if _, err = tx.ExecContext(ctx, q); err != nil {
-				return fmt.Errorf("migrate schema v4: %w", err)
-			}
-		}
-		if _, err = tx.ExecContext(ctx, "PRAGMA user_version = 4"); err != nil {
-			return err
-		}
-	}
-	if v < 5 {
-		if _, err = tx.ExecContext(ctx, `ALTER TABLE accounts ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0 CHECK(is_admin IN (0,1))`); err != nil {
-			return fmt.Errorf("migrate schema v5: %w", err)
-		}
-		if _, err = tx.ExecContext(ctx, "PRAGMA user_version = 5"); err != nil {
-			return err
-		}
-	}
-	if v < 6 {
-		for _, q := range schemaV6 {
-			if _, err = tx.ExecContext(ctx, q); err != nil {
-				return fmt.Errorf("migrate schema v6: %w", err)
-			}
-		}
-		if _, err = tx.ExecContext(ctx, "PRAGMA user_version = 6"); err != nil {
-			return err
-		}
-	}
-	if v < 7 {
-		for _, q := range schemaV7 {
-			if _, err = tx.ExecContext(ctx, q); err != nil {
-				return fmt.Errorf("migrate schema v7: %w", err)
-			}
-		}
-		if _, err = tx.ExecContext(ctx, "PRAGMA user_version = 7"); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
-}
-
-var schemaV1 = []string{
-	`CREATE TABLE clients(fingerprint TEXT PRIMARY KEY,note TEXT NOT NULL DEFAULT '',first_seen_at INTEGER NOT NULL,last_seen_at INTEGER NOT NULL,last_ip TEXT NOT NULL DEFAULT '',last_client_id TEXT NOT NULL DEFAULT '',last_reported_name TEXT NOT NULL DEFAULT '',last_role TEXT NOT NULL DEFAULT '',last_version TEXT NOT NULL DEFAULT '')`,
-	`CREATE TABLE blacklist(fingerprint TEXT PRIMARY KEY,reason TEXT NOT NULL,operator TEXT NOT NULL,created_at INTEGER NOT NULL,expires_at INTEGER NULL)`,
-	`CREATE TABLE connection_audit(id INTEGER PRIMARY KEY AUTOINCREMENT,session_id TEXT NULL,fingerprint TEXT NOT NULL DEFAULT '',client_id TEXT NOT NULL DEFAULT '',remote_ip TEXT NOT NULL DEFAULT '',authenticated_at INTEGER NOT NULL,hello_at INTEGER NULL,disconnected_at INTEGER NULL,result TEXT NOT NULL,disconnect_reason TEXT NOT NULL DEFAULT '',reported_name TEXT NOT NULL DEFAULT '',role TEXT NOT NULL DEFAULT '',version TEXT NOT NULL DEFAULT '')`,
-	`CREATE TABLE access_audit(id INTEGER PRIMARY KEY AUTOINCREMENT,visitor_session_id TEXT NOT NULL DEFAULT '',visitor_fingerprint TEXT NOT NULL DEFAULT '',visitor_client_id TEXT NOT NULL DEFAULT '',target_session_id TEXT NOT NULL DEFAULT '',target_fingerprint TEXT NOT NULL DEFAULT '',target_client_id TEXT NOT NULL DEFAULT '',target_tunnel_id TEXT NOT NULL DEFAULT '',target_tunnel_name TEXT NOT NULL DEFAULT '',target_remote_port INTEGER NOT NULL DEFAULT 0,started_at INTEGER NOT NULL,ended_at INTEGER NULL,result TEXT NOT NULL,reason TEXT NOT NULL DEFAULT '',bytes_sent INTEGER NOT NULL DEFAULT 0,bytes_received INTEGER NOT NULL DEFAULT 0)`,
-	`CREATE TABLE admin_actions(id INTEGER PRIMARY KEY AUTOINCREMENT,action TEXT NOT NULL,target_type TEXT NOT NULL,target_id TEXT NOT NULL,reason TEXT NOT NULL,result TEXT NOT NULL,error TEXT NOT NULL DEFAULT '',operator TEXT NOT NULL,transport_peer TEXT NOT NULL,source_ip TEXT NULL,created_at INTEGER NOT NULL)`,
-	`CREATE INDEX connection_audit_time ON connection_audit(authenticated_at DESC,id DESC)`, `CREATE INDEX connection_audit_fingerprint_time ON connection_audit(fingerprint,authenticated_at DESC)`, `CREATE INDEX connection_audit_session ON connection_audit(session_id)`, `CREATE INDEX connection_audit_client_time ON connection_audit(client_id,authenticated_at DESC)`,
-	`CREATE INDEX access_audit_time ON access_audit(started_at DESC,id DESC)`, `CREATE INDEX access_audit_target_fingerprint_time ON access_audit(target_fingerprint,started_at DESC)`, `CREATE INDEX access_audit_visitor_fingerprint_time ON access_audit(visitor_fingerprint,started_at DESC)`,
-	`CREATE INDEX admin_actions_time ON admin_actions(created_at DESC,id DESC)`, `CREATE INDEX blacklist_expires_at ON blacklist(expires_at)`,
-}
 
 func dbtime(t time.Time) int64   { return t.UTC().UnixMicro() }
 func scantime(v int64) time.Time { return time.UnixMicro(v).UTC() }

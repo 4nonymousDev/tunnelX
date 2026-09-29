@@ -14,7 +14,6 @@ import (
 	"tunnelx/internal/manager"
 	"tunnelx/internal/proto"
 	"tunnelx/internal/tunnel"
-	"tunnelx/internal/updatepolicy"
 )
 
 // ConfirmationHandler owns all interactions that cannot be decided by a daemon.
@@ -62,7 +61,6 @@ type TunnelSnapshot struct {
 }
 
 type Snapshot struct {
-	UpdatePolicy *updatepolicy.Status
 	Version      string
 	Config       config.Config
 	Connection   manager.ConnStatus
@@ -164,7 +162,6 @@ func (s *Service) Snapshot(minLogLevel logbuf.Level) Snapshot {
 
 func (s *Service) snapshotLocked(minLogLevel logbuf.Level) Snapshot {
 	snap := Snapshot{
-		UpdatePolicy: s.mgr.UpdatePolicy(),
 		Version:      s.version,
 		Config:       cloneConfig(s.cfg),
 		Connection:   s.mgr.ConnStatus(),
@@ -304,9 +301,6 @@ func (s *Service) UpdateSettings(name, addr, keyPath string) error {
 			s.mgr.Start()
 		}
 		return err
-	}
-	if oldAddr != addr {
-		s.mgr.ClearUpdatePolicy()
 	}
 	if wasRunning {
 		s.mgr.Start()

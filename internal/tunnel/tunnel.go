@@ -24,8 +24,8 @@ import (
 
 // Resolver returns a verified target for each business connection.
 type Resolver interface {
-	// Legacy source-port matching must identify exactly one verified publication.
-	ResolveTarget(peerID, fingerprint, peerTunnelID string, srcPort int) (proto.Target, error)
+	// Match the peer identity and stable tunnel ID.
+	ResolveTarget(peerID, fingerprint, peerTunnelID string) (proto.Target, error)
 
 	// DescribeRegistry 返回注册表中当前可选的对端，用于在解析失败时
 	// 告诉用户"实际有什么可用"——否则只报"对端不在线"，无法区分是
@@ -205,11 +205,11 @@ func (t *Tunnel) serveExport(ctx context.Context, client *ssh.Client, pub Publis
 
 func (t *Tunnel) resolveTarget(res Resolver) (proto.Target, error) {
 	cfg := t.Config()
-	target, err := res.ResolveTarget(cfg.PeerID, cfg.PeerFingerprint, cfg.PeerTunnelID, cfg.PeerSrcPort)
+	target, err := res.ResolveTarget(cfg.PeerID, cfg.PeerFingerprint, cfg.PeerTunnelID)
 	if err != nil {
 		return proto.Target{}, err
 	}
-	if cfg.PeerFingerprint == "" || cfg.PeerTunnelID == "" {
+	if cfg.PeerFingerprint == "" {
 		if binder, ok := res.(interface {
 			BindTarget(string, proto.Target) error
 		}); ok {

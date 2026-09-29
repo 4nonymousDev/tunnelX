@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,7 +19,6 @@ var ErrCommitOutcomeUnknown = errors.New("transaction outcome is uncertain; admi
 type Store struct {
 	db                   *sql.DB
 	path                 string
-	backupPath           string
 	opts                 Options
 	rejected             [3]atomic.Int64
 	stop                 chan struct{}
@@ -58,22 +56,7 @@ func OpenWithOptions(path string, o Options) (*Store, error) {
 	s := &Store{db: db, path: path, opts: o, stop: make(chan struct{}), done: make(chan struct{}), uncertainOps: make(map[string]struct{})}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	var version int
-	if err = db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if version > schemaVersion {
-		db.Close()
-		return nil, fmt.Errorf("database schema version %d is newer than supported %d", version, schemaVersion)
-	}
-	if version > 0 && version < schemaVersion && s.fileBacked() {
-		if err = s.backupBeforeMigration(ctx, version); err != nil {
-			db.Close()
-			return nil, err
-		}
-	}
-	if err = s.migrate(ctx); err != nil {
+	if err = s.initialize(ctx); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -105,53 +88,6 @@ func OpenWithOptions(path string, o Options) (*Store, error) {
 func (s *Store) fileBacked() bool {
 	return s.path != "" && s.path != ":memory:" && !strings.HasPrefix(s.path, "file:")
 }
-func (s *Store) backupBeforeMigration(ctx context.Context, version int) error {
-	name := fmt.Sprintf("%s.backup-v%d-to-v%d-%s", s.path, version, schemaVersion, time.Now().UTC().Format("20060102T150405.000000000Z"))
-	f, err := os.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-	if err != nil {
-		return fmt.Errorf("create migration backup: %w", err)
-	}
-	if err = f.Close(); err != nil {
-		return err
-	}
-	if _, err = s.db.ExecContext(ctx, "VACUUM INTO ?", name); err != nil {
-		_ = os.Remove(name)
-		return fmt.Errorf("migration backup failed; original schema retained: %w", err)
-	}
-	// VACUUM INTO produces a consistent standalone snapshot, including WAL data.
-	f, err = os.OpenFile(name, os.O_RDWR, 0600)
-	if err != nil {
-		return err
-	}
-	err = f.Sync()
-	closeErr := f.Close()
-	if err != nil {
-		return err
-	}
-	if closeErr != nil {
-		return closeErr
-	}
-	// Windows directory handles do not support File.Sync; on POSIX persist the
-	// directory entry as well, so migration cannot outrun its recovery snapshot.
-	if runtime.GOOS != "windows" {
-		dir, e := os.Open(filepath.Dir(name))
-		if e != nil {
-			return e
-		}
-		e = dir.Sync()
-		ce := dir.Close()
-		if e != nil {
-			return e
-		}
-		if ce != nil {
-			return ce
-		}
-	}
-	s.backupPath = name
-	return nil
-}
-func (s *Store) BackupPath() string { return s.backupPath }
-
 func (s *Store) CheckAdmission(ctx context.Context) error {
 	if s.commitUncertain.Load() {
 		return ErrCommitOutcomeUnknown

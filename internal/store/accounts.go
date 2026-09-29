@@ -21,12 +21,6 @@ var (
 const MaxAccounts = 1000
 const DefaultMaxAccountDevices = 10
 
-var schemaV4 = []string{
-	`CREATE TABLE accounts(username TEXT PRIMARY KEY,password_hash TEXT NOT NULL,enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),generation INTEGER NOT NULL CHECK(generation>0),max_devices INTEGER NOT NULL CHECK(max_devices BETWEEN 1 AND 50),created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL)`,
-	`CREATE TABLE account_devices(client_id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL UNIQUE,username TEXT NOT NULL REFERENCES accounts(username),generation INTEGER NOT NULL CHECK(generation>0),name TEXT NOT NULL DEFAULT '',created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL)`,
-	`CREATE INDEX account_device_username ON account_devices(username)`,
-}
-
 // Account intentionally has no password or hash field, including in JSON.
 type Account struct {
 	Username   string    `json:"username"`

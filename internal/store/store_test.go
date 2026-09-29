@@ -138,35 +138,6 @@ func TestImportClientStoresMetadata(t *testing.T) {
 	}
 }
 
-func TestSchemaV1MigratesClientMetadata(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "v1.db")
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, query := range schemaV1 {
-		if _, err = db.Exec(query); err != nil {
-			db.Close()
-			t.Fatal(err)
-		}
-	}
-	if _, err = db.Exec("PRAGMA user_version = 1"); err != nil {
-		db.Close()
-		t.Fatal(err)
-	}
-	if err = db.Close(); err != nil {
-		t.Fatal(err)
-	}
-	s, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	if err = s.ImportClient(context.Background(), "SHA256:migrated", "bob", "bob@example.com", "BOB-PC", time.Now()); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestStableTimeIDCursorAcrossAuditPages(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "x.db"))
 	if err != nil {

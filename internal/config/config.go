@@ -59,16 +59,15 @@ type Tunnel struct {
 	LocalPort int `json:"local_port,omitempty"`
 
 	// Import 模式：在本地 ListenPort 监听，转发到 PeerID 那台机器的导出隧道。
-	// 新配置按「对端身份 + 隧道 ID」匹配；旧配置没有 PeerTunnelID 时按源端口兼容。
+	// 按「对端身份 + 隧道 ID」匹配。
 	// 服务端端口是动态分配的，不进入持久化配置。
 	// Import mode listens on ListenPort and forwards to an exported tunnel on PeerID.
-	// New configs match peer identity plus stable tunnel ID; legacy configs fall back to
-	// source port. The dynamic server port is never persisted.
+	// Match peer identity plus stable tunnel ID. Source ports are display metadata.
 	PeerID          string `json:"peer_id,omitempty"` // 对端 Exporter UUID / Peer Exporter UUID.
 	PeerFingerprint string `json:"peer_fingerprint,omitempty"`
 	// Peer exporter UUID.
-	PeerTunnelID string `json:"peer_tunnel_id,omitempty"` // 对端导出隧道的稳定 ID；旧配置为空时按端口兼容 / Stable peer tunnel ID; legacy empty values match by port.
-	// Stable peer tunnel ID; legacy empty values fall back to the port.
+	PeerTunnelID string `json:"peer_tunnel_id,omitempty"` // 对端导出隧道的稳定 ID / Stable peer tunnel ID.
+	// Stable peer tunnel ID.
 	PeerName string `json:"peer_name,omitempty"` // 对端显示名，仅供 UI 回显 / Peer display name for UI rendering only.
 	// Peer display name, used only by the UI.
 	PeerSrcPort int `json:"peer_src_port,omitempty"` // 对端的源端口 / Peer's source port.
@@ -80,7 +79,6 @@ type Tunnel struct {
 // Config 是完整的配置文件内容。
 // Config is the complete configuration-file content.
 type Config struct {
-	SchemaVersion int `json:"schema_version"`
 	// ID 是本机的稳定身份，首次启动生成后永不改变。
 	// 不能只用计算机名做身份：Windows 默认名重名概率虽低，但用户手动改名
 	// （DEV-PC、WIN10）或从同一镜像克隆的机器/虚拟机，重名很常见，会导致
@@ -103,12 +101,6 @@ type Config struct {
 	// Private-key path; relative paths use the executable directory and new configs default to DefaultKeyName.
 
 	Tunnels []Tunnel `json:"tunnels"`
-
-	// SuppressTrayHint 记录用户是否勾选了"不再提示"。
-	// Deprecated: 桌面 UI 会把该旧字段迁移到自己的偏好文件。
-	// SuppressTrayHint records the legacy "do not show again" choice. Deprecated: the
-	// desktop UI migrates it to its own preferences file.
-	SuppressTrayHint bool `json:"suppress_tray_hint,omitempty"`
 
 	path string // 加载来源，Save 时写回 / Load source written back by Save.
 	// Load source and Save destination.
@@ -211,55 +203,16 @@ func loadFrom(path string) (*Config, error) {
 	}
 	c.path = path
 	c.loaded = true
-	if c.SchemaVersion > 2 {
-		return nil, fmt.Errorf("配置版本 %d 不受当前程序支持", c.SchemaVersion)
-	}
 	applyDefaults(&c)
-	if c.SchemaVersion < 2 {
-		if err := backupLegacy(path, data); err != nil {
-			return nil, err
-		}
-		c.SchemaVersion = 2
-		if err := c.Save(); err != nil {
-			return nil, fmt.Errorf("迁移旧配置: %w", err)
-		}
-	}
 	return &c, nil
 }
 
-func backupLegacy(path string, data []byte) error {
-	backup := path + ".pre-v2.bak"
-	f, err := os.OpenFile(backup, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if errors.Is(err, fs.ErrExist) {
-		existing, readErr := os.ReadFile(backup)
-		if readErr != nil {
-			return readErr
-		}
-		if string(existing) != string(data) {
-			return fmt.Errorf("旧配置备份已存在且内容不同: %s", backup)
-		}
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("备份旧配置: %w", err)
-	}
-	if _, err = f.Write(data); err == nil {
-		err = f.Sync()
-	}
-	closeErr := f.Close()
-	if err != nil {
-		return err
-	}
-	return closeErr
-}
-
-// applyDefaults 补齐历史配置或人工编辑遗漏的必填项。
+// applyDefaults 补齐人工编辑遗漏的必填项。
 // 注意：只补 ID 与 Name。key_path 不在此列——用户可能有意清空它，
 // 替他填回去属于擅自做主，且会把"未配置私钥"这个明确的错误
 // 变成"文件不存在"这个更难懂的错误。补默认值只发生在全新配置上（见 newDefault）。
-// applyDefaults fills required values omitted by legacy or manual configurations.
-// The former server_user JSON property is ignored as an unknown legacy field. An empty
-// key_path may be deliberate, so it remains untouched.
+// applyDefaults fills required values omitted by manual configurations.
+// An empty key_path may be deliberate, so it remains untouched.
 func applyDefaults(c *Config) {
 	if c.ID == "" {
 		c.ID = newID()
@@ -318,9 +271,6 @@ func (c *Config) Loaded() bool { return c.loaded }
 // Save 原子写回配置：先写临时文件再改名，避免写入中途崩溃导致配置损坏。
 // Save atomically writes through a temporary file and rename to avoid partial corruption.
 func (c *Config) Save() error {
-	if c.SchemaVersion < 2 {
-		c.SchemaVersion = 2
-	}
 	if c.path == "" {
 		dir, err := Dir()
 		if err != nil {
@@ -334,7 +284,7 @@ func (c *Config) Save() error {
 	// 未注入回调时（如 manager 侧的保存）保持旧行为：此时没有询问渠道，
 	// 保存失败比覆盖更糟。
 	// If the target appeared after startup, ask before destroying an externally created
-	// file. Without an injected prompt, preserve legacy behavior because there is no UI.
+	// file. Without an injected prompt, write directly because there is no UI.
 	claimAfterWrite := false
 	if !c.loaded {
 		if _, err := os.Stat(c.path); err == nil && c.clobberPrompt != nil {
@@ -413,9 +363,9 @@ func (c *Config) StateDir() (string, error) {
 }
 
 // BaseDir 返回该配置拥有的文件目录。显式加载的配置以配置文件所在目录
-// 为准；仅为兼容旧的便携模式，无路径配置才退回可执行文件目录。
+// 为准；便携模式，无路径配置才退回可执行文件目录。
 // BaseDir returns the directory owned by this config. Explicit configs use their own
-// directory; only legacy pathless portable configs fall back to the executable directory.
+// directory; pathless portable configs fall back to the executable directory.
 func (c *Config) BaseDir() (string, error) {
 	if c.path != "" {
 		return filepath.Dir(c.path), nil
@@ -445,11 +395,10 @@ func (c *Config) ResolvedKeyPath() (string, error) {
 
 func newDefault() *Config {
 	return &Config{
-		SchemaVersion: 2,
-		ID:            newID(),
-		Name:          hostname(),
-		KeyPath:       DefaultKeyName,
-		Tunnels:       []Tunnel{},
+		ID:      newID(),
+		Name:    hostname(),
+		KeyPath: DefaultKeyName,
+		Tunnels: []Tunnel{},
 	}
 }
 

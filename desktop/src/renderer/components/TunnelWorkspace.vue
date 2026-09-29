@@ -18,11 +18,6 @@
         <button type="button" aria-label="关闭错误提示" @click="clearError">×</button>
       </div>
 
-      <section v-if="updateRequirement" class="update-notice" :class="{ blocked: updateRequirement.blocked }" role="status">
-        <div><strong>{{ updateRequirement.blocked ? '需要更新后才能连接' : '请在截止时间前更新' }}</strong><p>最低版本 {{ updateRequirement.minimum_version }} · 截止 {{ updateDeadline }}</p><p v-if="updateRequirement.message">{{ updateRequirement.message }}</p><p>{{ updateRequirement.blocked ? '服务端已停止当前版本接入。' : '宽限期内仍可使用；到期后连接和隧道会断开。' }} 更新程序后继续使用原密钥和配置。</p></div>
-        <button class="button button-primary" type="button" @click="openRequiredUpdate">检查更新</button>
-      </section>
-
       <section class="summary-row">
         <div>
           <p class="eyebrow">TUNNEL WORKSPACE</p>
@@ -34,7 +29,7 @@
         </button>
       </section>
 
-      <section v-if="connection.state !== 'connected' && !updateRequirement?.blocked" class="authorization-notice">
+      <section v-if="connection.state !== 'connected'" class="authorization-notice">
         <div><strong>使用设备公钥连接</strong><p>在连接设置中生成密钥，将公钥和设备 ID 交给管理员登记；已授权设备可直接连接。</p></div>
         <button class="button button-primary" type="button" :disabled="busy || status.phase !== 'running'" @click="settingsOpen = true">连接设置</button>
       </section>
@@ -104,7 +99,6 @@
     <UpdateDialog
       :open="updateDialogOpen"
       :state="updateState"
-      :requirement="updateRequirement"
       @close="updateDialogOpen = false"
       @confirm="beginUpdate"
     />
@@ -128,7 +122,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onUnmounted, shallowRef, watch } from 'vue'
+import { computed, onUnmounted, shallowRef } from 'vue'
 
 import type {
   ConfirmationDTO,
@@ -198,21 +192,6 @@ const importPickerOpen = shallowRef(false)
 const diagnosticsCopied = shallowRef(false)
 const updateDialogOpen = shallowRef(false)
 let diagnosticsResetTimer: ReturnType<typeof setTimeout> | undefined
-
-const updateRequirement = computed(() => snapshot.value?.update_policy?.required ? snapshot.value.update_policy : undefined)
-const updateDeadline = computed(() => updateRequirement.value ? new Date(updateRequirement.value.enforce_after).toLocaleString() : '')
-watch(() => {
-  const requirement = updateRequirement.value
-  return requirement ? `${snapshot.value?.server_addr}:${requirement.generation}:${requirement.blocked}` : ''
-}, value => {
-  if (value) void openRequiredUpdate()
-}, { immediate: true })
-
-async function openRequiredUpdate(): Promise<void> {
-  updateDialogOpen.value = true
-  // The configured, signature-verified release feed remains the only update source.
-  if (!['downloading', 'downloaded', 'installing'].includes(updateState.value.phase)) await checkForUpdates()
-}
 
 const visibleTunnels = computed(() => tunnels.value.filter(item => item.config.kind === activeTab.value))
 const availableImports = computed(() => availableImportEntries(snapshot.value))
@@ -348,8 +327,6 @@ async function answerConfirmation(accept: boolean): Promise<void> {
 </script>
 
 <style scoped>
-.update-notice { flex-shrink: 0; }.update-notice p { max-height: 72px; overflow: auto; }
-.update-notice { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 18px; padding: 16px; border: 1px solid #bc943f; border-radius: 12px; background: #bc943f15; }.update-notice.blocked { border-color: #df6c79; background: #df6c7915; }.update-notice p { margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }.update-notice button { flex-shrink: 0; }
 .app-shell { display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 0; overflow: hidden; }
 .workspace { display: flex; flex: 1 1 auto; flex-direction: column; width: min(980px, calc(100% - 56px)); min-height: 0; margin: 0 auto; padding: 34px 0 24px; overflow: hidden; }
 .workspace-content { flex: 1 1 auto; min-height: 0; }

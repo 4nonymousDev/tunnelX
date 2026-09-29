@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -19,22 +18,13 @@ func securityFingerprint(v string) string {
 	return "SHA256:" + base64.RawStdEncoding.EncodeToString(sum[:])
 }
 
-func TestMigrationBacksUpAndPreservesV2WithoutTrustingHistoricalClaims(t *testing.T) {
+func TestReopenPreservesRecordsWithoutTrustingClaims(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "history.db")
-	db, err := sql.Open("sqlite", path)
+	initial, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, q := range schemaV1 {
-		if _, err = db.Exec(q); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, q := range []string{"ALTER TABLE clients ADD COLUMN username TEXT NOT NULL DEFAULT ''", "ALTER TABLE clients ADD COLUMN email TEXT NOT NULL DEFAULT ''", "ALTER TABLE clients ADD COLUMN computer_name TEXT NOT NULL DEFAULT ''", "PRAGMA user_version=2"} {
-		if _, err = db.Exec(q); err != nil {
-			t.Fatal(err)
-		}
-	}
+	db := initial.db
 	fp := securityFingerprint("existing-key")
 	if _, err = db.Exec(`INSERT INTO clients(fingerprint,note,first_seen_at,last_seen_at,last_client_id,username) VALUES(?,'keep note',1,2,'historical-claim','legacy label')`, fp); err != nil {
 		t.Fatal(err)
@@ -45,7 +35,7 @@ func TestMigrationBacksUpAndPreservesV2WithoutTrustingHistoricalClaims(t *testin
 	if _, err = db.Exec(`INSERT INTO connection_audit(fingerprint,authenticated_at,result) VALUES(?,1,'rejected')`, fp); err != nil {
 		t.Fatal(err)
 	}
-	if err = db.Close(); err != nil {
+	if err = initial.Close(); err != nil {
 		t.Fatal(err)
 	}
 	s, err := Open(path)
@@ -66,35 +56,7 @@ func TestMigrationBacksUpAndPreservesV2WithoutTrustingHistoricalClaims(t *testin
 	if err = s.ValidateIdentity(ctx, fp, "historical-claim"); !errors.Is(err, ErrIdentityUnbound) {
 		t.Fatalf("historical claim gained trust: %v", err)
 	}
-	backup := s.BackupPath()
-	if backup == "" {
-		t.Fatal("migration did not create backup")
-	}
-	if _, err = os.Stat(backup); err != nil {
-		t.Fatal(err)
-	}
-	backupDB, err := sql.Open("sqlite", backup)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var version int
-	if err = backupDB.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 2 {
-		t.Fatalf("backup version %d err %v", version, err)
-	}
-	var note string
-	if err = backupDB.QueryRow(`SELECT note FROM clients WHERE fingerprint=?`, fp).Scan(&note); err != nil || note != "keep note" {
-		t.Fatal("backup missing original data")
-	}
-	backupDB.Close()
-	s.Close()
-	s, err = Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
 	defer s.Close()
-	if s.BackupPath() != "" {
-		t.Fatal("unchanged schema created another migration backup")
-	}
 }
 
 func TestExplicitIdentityApprovalCASRevocationAndAuditRollback(t *testing.T) {

@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/cookiejar"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,16 +25,12 @@ func managementConfig(t *testing.T) Config {
 	host := filepath.Join(dir, "host_key")
 	key := filepath.Join(dir, "client_key")
 	auth := filepath.Join(dir, "authorized_keys")
-	token := filepath.Join(dir, "admin.token")
 	genKey(t, host)
 	pub := genKey(t, key)
 	if err := os.WriteFile(auth, pub, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(token, []byte(strings.Repeat("a", 64)+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return Config{Addr: "127.0.0.1:0", HostKeyPath: host, AuthorizedKeys: auth, AdminAddr: "127.0.0.1:0", AdminTokenFile: token, DataDir: filepath.Join(dir, "data"), Version: "test"}
+	return Config{Addr: "127.0.0.1:0", HostKeyPath: host, AuthorizedKeys: auth, AdminAddr: "127.0.0.1:0", DataDir: filepath.Join(dir, "data"), Version: "test"}
 }
 
 func TestManagementAddressMustBeExplicitLoopback(t *testing.T) {
@@ -54,31 +49,6 @@ func TestManagementAddressMustBeExplicitLoopback(t *testing.T) {
 		if s, e := New(cfg, nil); e == nil {
 			_ = s.Close()
 			t.Errorf("unsafe admin address %q accepted", addr)
-		}
-	}
-}
-
-func TestLegacyAdminTokenIsIgnoredAndCannotAuthenticate(t *testing.T) {
-	for _, present := range []bool{false, true} {
-		cfg := managementConfig(t)
-		if present {
-			if err := os.WriteFile(cfg.AdminTokenFile, []byte("short"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-		} else if err := os.Remove(cfg.AdminTokenFile); err != nil {
-			t.Fatal(err)
-		}
-		s, err := New(cfg, nil)
-		if err != nil {
-			t.Fatalf("legacy token must not affect startup: %v", err)
-		}
-		r := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:2223/api/v1/overview", nil)
-		r.Header.Set("Authorization", "Bearer "+strings.Repeat("a", 64))
-		w := httptest.NewRecorder()
-		s.adminAPI.ServeHTTP(w, r)
-		_ = s.Close()
-		if w.Code != http.StatusUnauthorized {
-			t.Fatalf("legacy Bearer authenticated: %d", w.Code)
 		}
 	}
 }
@@ -387,7 +357,6 @@ func TestRejectedAuthenticationAndFailedAdminActionAreAudited(t *testing.T) {
 func TestHelloTimeoutClosesAuthenticatedConnection(t *testing.T) {
 	cfg := managementConfig(t)
 	cfg.AdminAddr = ""
-	cfg.AdminTokenFile = ""
 	cfg.HelloTimeout = 100 * time.Millisecond
 	s, err := New(cfg, nil)
 	if err != nil {
@@ -407,7 +376,7 @@ func TestHelloTimeoutClosesAuthenticatedConnection(t *testing.T) {
 
 func TestMixedRolePublishAndCancelUpdatesRegistry(t *testing.T) {
 	cfg := managementConfig(t)
-	cfg.AdminAddr, cfg.AdminTokenFile = "", ""
+	cfg.AdminAddr = ""
 	s, err := New(cfg, nil)
 	if err != nil {
 		t.Fatal(err)

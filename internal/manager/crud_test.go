@@ -19,7 +19,7 @@ import (
 
 type onlineImportResolver struct{}
 
-func (onlineImportResolver) ResolveTarget(id, fp, tid string, port int) (proto.Target, error) {
+func (onlineImportResolver) ResolveTarget(id, fp, tid string) (proto.Target, error) {
 	return proto.Target{ClientID: id, Fingerprint: "trusted", TunnelID: "web", SessionID: "session", Generation: 1}, nil
 }
 func (onlineImportResolver) DescribeRegistry() []string { return nil }
