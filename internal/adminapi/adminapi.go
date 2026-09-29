@@ -335,6 +335,17 @@ func (s *Server) serveClient(w http.ResponseWriter, r *http.Request, rid, tail s
 	case http.MethodGet:
 		v, e := s.backend.GetClient(r.Context(), fp)
 		s.respond(w, rid, v, e)
+	case http.MethodDelete:
+		var b reasonBody
+		if !decodeJSON(w, r, rid, &b) {
+			return
+		}
+		reason, e := validText(b.Reason, 1, 500, "reason")
+		if e != nil {
+			bad(w, rid, e)
+			return
+		}
+		s.respondEmpty(w, rid, s.backend.DeleteClient(r.Context(), fp, reason))
 	case http.MethodPatch:
 		var b noteBody
 		if !decodeJSON(w, r, rid, &b) {
@@ -353,7 +364,7 @@ func (s *Server) serveClient(w http.ResponseWriter, r *http.Request, rid, tail s
 		e = s.backend.UpdateClientNote(r.Context(), fp, note, reason)
 		s.respondEmpty(w, rid, e)
 	default:
-		w.Header().Set("Allow", "GET, PATCH")
+		w.Header().Set("Allow", "GET, PATCH, DELETE")
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", rid)
 	}
 }

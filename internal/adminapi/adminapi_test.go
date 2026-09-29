@@ -14,6 +14,7 @@ import (
 )
 
 type fakeBackend struct {
+	deletedFP, deletedReason string
 	disconnectID, reason     string
 	noteFP, note, noteReason string
 	blockedFP                string
@@ -293,5 +294,38 @@ func TestSlowSubscriberIsDropped(t *testing.T) {
 	h.mu.Unlock()
 	if n != 0 {
 		t.Fatalf("slow subscriber retained: %d", n)
+	}
+}
+
+func (f *fakeBackend) DeleteClient(_ context.Context, fp, reason string) error {
+	f.deletedFP, f.deletedReason = fp, reason
+	return nil
+}
+func TestDeleteClientEndpoint(t *testing.T) {
+	fp := "SHA256:" + strings.Repeat("a", 42) + "/"
+	for _, tc := range []struct {
+		name, target, body, auth string
+		want                     int
+	}{
+		{"delete", "/api/v1/clients/" + strings.ReplaceAll(fp, "/", "%2F"), `{"reason":" cleanup old key "}`, "secret", 204},
+		{"login", "/api/v1/clients/" + strings.ReplaceAll(fp, "/", "%2F"), `{"reason":"cleanup"}`, "", 401},
+		{"reason", "/api/v1/clients/" + strings.ReplaceAll(fp, "/", "%2F"), `{"reason":" "}`, "secret", 400},
+		{"invalid fingerprint", "/api/v1/clients/SAME-PC", `{"reason":"cleanup"}`, "secret", 400},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeBackend{}
+			s := newTestServer(t, f)
+			w := request(s, http.MethodDelete, tc.target, tc.body, tc.auth, "application/json")
+			if w.Code != tc.want {
+				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+			}
+			if tc.want == 204 {
+				if f.deletedFP != fp || f.deletedReason != "cleanup old key" {
+					t.Fatalf("wrong target/reason: %q %q", f.deletedFP, f.deletedReason)
+				}
+			} else if f.deletedFP != "" {
+				t.Fatal("invalid request reached deletion")
+			}
+		})
 	}
 }

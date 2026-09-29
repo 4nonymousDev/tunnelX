@@ -492,6 +492,8 @@ func (b *adminBackend) ReconcileAdminOperation(ctx context.Context, id, reason s
 				s.notifyAudit(0)
 			}
 			return identityBackendError(err)
+		case "delete_client":
+			return b.reconcileClientDeletion(ctx, op, reason)
 		case "import_public_key":
 			var healthy bool
 			applied, healthy = s.auth.FingerprintStatus(op.TargetID)

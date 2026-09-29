@@ -31,6 +31,7 @@ type Config struct {
 }
 
 type Server struct {
+	clientRecordsMu         sync.RWMutex // serialize deletion against in-flight asset writes
 	cfg                     Config
 	sshCfg                  *ssh.ServerConfig
 	logf                    func(string, ...any)
@@ -332,7 +333,9 @@ func (s *Server) handleAdmitted(raw net.Conn, finish, release func()) {
 		}
 		s.notifyAudit(row)
 		ctx, cancel = s.dbContext()
-		e = s.store.UpsertClient(ctx, store.Seen{Fingerprint: fp, IP: remote, At: sess.ConnectedAt})
+		e = s.persistClientSession(sess.ID, func() error {
+			return s.store.UpsertClient(ctx, store.Seen{Fingerprint: fp, IP: remote, At: sess.ConnectedAt})
+		})
 		cancel()
 		if e != nil {
 			s.sessions.Disconnect(sess.ID, "client_store_failed")

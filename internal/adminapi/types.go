@@ -146,6 +146,7 @@ type Backend interface {
 	GetClient(context.Context, string) (Client, error)
 	ImportPublicKey(context.Context, ImportPublicKeyRequest) (ImportPublicKeyResult, error)
 	UpdateClientNote(context.Context, string, string, string) error
+	DeleteClient(context.Context, string, string) error
 	BlockClient(context.Context, string, BlockRequest) error
 	UnblockClient(context.Context, string, string) error
 	ListAuditEvents(context.Context, ListQuery) (Page[AuditEvent], error)

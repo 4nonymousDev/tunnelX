@@ -48,7 +48,9 @@ func (s *Server) handshake(sid string, conn *ssh.ServerConn, pc *proto.Conn) boo
 	version := s.policy.Version()
 	if s.store != nil {
 		ctx, cancel := s.dbContext()
-		err = s.store.RecordIdentityClaim(ctx, current.Fingerprint, h.ID, h.Name, current.RemoteIP)
+		err = s.persistClientSession(sid, func() error {
+			return s.store.RecordIdentityClaim(ctx, current.Fingerprint, h.ID, h.Name, current.RemoteIP)
+		})
 		cancel()
 		if err != nil {
 			s.sendErr(conn, pc, proto.CodeInternalError, "无法记录身份核验请求")
@@ -69,7 +71,9 @@ func (s *Server) handshake(sid string, conn *ssh.ServerConn, pc *proto.Conn) boo
 		s.mu.Unlock()
 		now := time.Now().UTC()
 		ctx, cancel := s.dbContext()
-		err = s.store.UpsertClient(ctx, store.Seen{Fingerprint: current.Fingerprint, ClientID: h.ID, ReportedName: h.Name, Role: h.Role, Version: h.ClientVersion, At: now})
+		err = s.persistClientSession(sid, func() error {
+			return s.store.UpsertClient(ctx, store.Seen{Fingerprint: current.Fingerprint, ClientID: h.ID, ReportedName: h.Name, Role: h.Role, Version: h.ClientVersion, At: now})
+		})
 		if err == nil {
 			err = s.store.CompleteHello(ctx, auditID, store.ConnectionAudit{ClientID: h.ID, HelloAt: &now, Result: "online", ReportedName: h.Name, Role: h.Role, Version: h.ClientVersion})
 		}

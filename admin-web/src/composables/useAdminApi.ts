@@ -200,6 +200,14 @@ export function useAdminApi() {
     await loadClients()
     await loadClientDetail(fingerprint)
   }
+  async function deleteClient(fingerprint: string, reason: string) {
+    await execute(() => request(`/clients/${encodeURIComponent(fingerprint)}`, { method: 'DELETE', body: JSON.stringify({ reason }) }))
+    clients.value = clients.value.filter(client => client.fingerprint !== fingerprint)
+    if (clientDetail.value?.client.fingerprint === fingerprint) clientDetail.value = null
+    // A successful deletion must not be presented as failed if a refresh fails.
+    try { await Promise.all([loadClients(), loadGovernance(), loadAdminActions()]) }
+    catch (cause) { error.value = cause instanceof Error ? cause.message : '记录已删除，刷新失败，请手动刷新' }
+  }
   async function importPublicKey(payload: ImportPublicKeyRequestDto) {
     const result = await execute(() => request<ImportPublicKeyResultDto>('/clients/import-key', { method: 'POST', body: JSON.stringify(payload) }))
     await Promise.all([loadClients(), loadGovernance()])
@@ -412,7 +420,7 @@ export function useAdminApi() {
     clientDetail: readonly(clientDetail), auditPage: readonly(auditPage), adminActions: readonly(adminActions),
     loading: readonly(loading), error: readonly(error), eventsConnected: readonly(eventsConnected),
     authenticate, restoreSession, logout, refreshAll, loadAudit, loadClientDetail, disconnectSession,
-    updateClientNote, importPublicKey, blockClient, unblockClient, exportAudit,
+    updateClientNote, deleteClient, importPublicKey, blockClient, unblockClient, exportAudit,
     identities: readonly(identities), identityClaims: readonly(identityClaims), operations: readonly(operations),
     loadGovernance, findIdentity, bindIdentity, revokeIdentity, reconcileOperation,
     accounts: readonly(accounts), loadAccounts, createAccount, updateAccount,

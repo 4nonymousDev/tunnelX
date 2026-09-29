@@ -256,3 +256,54 @@ test('identity recovery uses the original fingerprint and changing device ID req
   await c.run('bind()')
   assert.deepEqual(saved, [{ client_id: 'same-device', fingerprint: 'SHA256:original-key', reason: 'Restore original identity', expected_generation: 4 }])
 })
+
+test('deleting one fingerprint preserves another device with the same name and uses CSRF', async () => {
+  const h = harness()
+  const old = { fingerprint: 'SHA256:old/key+1', last_reported_name: 'SAME-PC' }
+  const replacement = { fingerprint: 'SHA256:new-key', last_reported_name: 'SAME-PC' }
+  let rows = [old, replacement]
+  h.route(({ url, init }) => {
+    if (url === '/api/v1/clients') return json({ items: rows })
+    if (init.method === 'DELETE') { rows = [replacement]; return new Response(null, { status: 204 }) }
+  })
+  try {
+    await h.api.restoreSession()
+    await h.api.deleteClient(old.fingerprint, 'Remove old key')
+    assert.deepEqual(JSON.parse(JSON.stringify(h.api.clients.value)), [replacement])
+    const call = h.calls.find(call => call.init.method === 'DELETE')
+    assert.equal(call.url, '/api/v1/clients/SHA256%3Aold%2Fkey%2B1')
+    assert.equal(call.init.headers.get('X-CSRF-Token'), session.csrf_token)
+    assert.deepEqual(JSON.parse(call.init.body), { reason: 'Remove old key' })
+  } finally { h.close() }
+})
+
+test('rejected and uncertain deletions keep the device record visible', async () => {
+  for (const status of [400, 202]) {
+    const h = harness()
+    const client = { fingerprint: 'SHA256:old-key' }
+    h.route(({ url, init }) => {
+      if (url === '/api/v1/clients') return json({ items: [client] })
+      if (init.method === 'DELETE') return status === 202 ? json({ operation_id: 'pending-delete' }, 202) : json({ error: { message: 'Device is online' } }, 400)
+    })
+    try {
+      await h.api.restoreSession()
+      await assert.rejects(h.api.deleteClient(client.fingerprint, 'cleanup'))
+      assert.equal(h.api.clients.value[0].fingerprint, client.fingerprint)
+    } finally { h.close() }
+  }
+})
+
+test('successful deletion stays successful if the following refresh fails', async () => {
+  const h = harness()
+  let deleted = false
+  h.route(({ url, init }) => {
+    if (init.method === 'DELETE') { deleted = true; return new Response(null, { status: 204 }) }
+    if (url === '/api/v1/clients') return deleted ? json({ error: { message: 'Refresh failed' } }, 500) : json({ items: [{ fingerprint: 'SHA256:old' }] })
+  })
+  try {
+    await h.api.restoreSession()
+    await h.api.deleteClient('SHA256:old', 'cleanup')
+    assert.equal(h.api.clients.value.length, 0)
+    assert.equal(h.api.error.value, 'Refresh failed')
+  } finally { h.close() }
+})

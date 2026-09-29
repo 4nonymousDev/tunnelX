@@ -167,10 +167,51 @@ func (a *authKeys) Import(publicKey, comment string) (string, error) {
 	if len(next) > maxAuthorizedBytes {
 		return "", errors.New("authorized_keys exceeds size limit")
 	}
+	if err := a.replace(next); err != nil {
+		return "", err
+	}
+	return fp, nil
+}
+
+// Remove deletes every occurrence of one fingerprint while preserving other
+// key lines and comments. Import and reload share the same file writer lock.
+func (a *authKeys) Remove(fp string) error {
+	a.importMu.Lock()
+	defer a.importMu.Unlock()
+	data, err := readAuthorizedFile(a.path)
+	if err != nil {
+		return err
+	}
+	_, fps, err := parseAuthorizedKeys(data)
+	if err != nil {
+		return err
+	}
+	if !fps[fp] {
+		return a.load()
+	}
+	var next []byte
+	for _, line := range bytes.SplitAfter(data, []byte("\n")) {
+		raw := bytes.TrimSpace(line)
+		if len(raw) > 0 && raw[0] != '#' {
+			key, _, _, _, err := ssh.ParseAuthorizedKey(raw)
+			if err != nil {
+				return err
+			}
+			if ssh.FingerprintSHA256(key) == fp {
+				continue
+			}
+		}
+		next = append(next, line...)
+	}
+	return a.replace(next)
+}
+
+// replace atomically publishes a validated authorized_keys file.
+func (a *authKeys) replace(next []byte) error {
 	tmp := filepath.Join(filepath.Dir(a.path), ".authorized_keys-"+rand.Text()+".tmp")
 	f, err := keyperm.Create(tmp)
 	if err != nil {
-		return "", err
+		return err
 	}
 	defer os.Remove(tmp)
 	_, writeErr := f.Write(next)
@@ -179,22 +220,22 @@ func (a *authKeys) Import(publicKey, comment string) (string, error) {
 	}
 	closeErr := f.Close()
 	if writeErr != nil {
-		return "", writeErr
+		return writeErr
 	}
 	if closeErr != nil {
-		return "", closeErr
+		return closeErr
 	}
 	if err = os.Rename(tmp, a.path); err != nil {
-		return "", err
+		return err
 	}
 	if err = syncAuthDirectory(filepath.Dir(a.path)); err != nil {
 		a.markUnhealthy()
-		return "", err
+		return err
 	}
 	if err := a.load(); err != nil {
-		return "", err
+		return err
 	}
-	return fp, nil
+	return nil
 }
 
 func (a *authKeys) maybeReload() {
