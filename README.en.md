@@ -46,7 +46,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 
 # Upload and install
 scp deploy/install.sh tunnel-server-linux-amd64 user@your-server:~/
-ssh user@your-server 'chmod +x install.sh && sudo ./install.sh'
+ssh user@your-server 'chmod +x install.sh && sudo ./install.sh tunnel-server-linux-amd64'
 ```
 
 The installer creates the service account, generates the host key, configures systemd, and enables startup at boot. See [deploy/README.en.md](deploy/README.en.md).

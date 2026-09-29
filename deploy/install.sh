@@ -5,10 +5,10 @@
 #
 # 用法：
 # Usage:
-#   sudo ./install.sh                          # 安装并启动
-#   sudo ./install.sh                          # Install and start
-#   sudo ./install.sh --port 3333              # 指定监听端口
-#   sudo ./install.sh --port 3333              # Select the listen port
+#   sudo ./install.sh ./tunnel-server          # 安装并启动
+#   sudo ./install.sh ./tunnel-server          # Install and start
+#   sudo ./install.sh ./tunnel-server --port 3333 # 指定监听端口
+#   sudo ./install.sh ./tunnel-server --port 3333 # Select the listen port
 #   sudo ./install.sh --uninstall              # 卸载（保留配置与数据）
 #   sudo ./install.sh --uninstall              # Uninstall (keep configuration and data)
 #   sudo ./install.sh --uninstall --purge      # 卸载并删除全部数据
@@ -25,7 +25,7 @@ umask 077
 
 # ---------- 默认值 ----------
 # ---------- Defaults ----------
-BINARY_NAME="tunnel-server-linux-amd64"
+SRC_BINARY=""
 INSTALL_PATH="/usr/local/bin/tunnel-server"
 CONFIG_DIR="/etc/tunnel-server"
 DATA_DIR="/var/lib/tunnel-server"
@@ -71,16 +71,23 @@ usage() {
 
 # ---------- 参数 ----------
 # ---------- Arguments ----------
+if [[ $# -gt 0 && $1 != -* ]]; then
+    SRC_BINARY="$1"
+    shift
+fi
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --port)      PORT="${2:?--port 需要一个端口号}"; shift 2 ;;
-        --binary)    BINARY_NAME="${2:?--binary 需要一个文件名}"; shift 2 ;;
         --uninstall) DO_UNINSTALL=1; shift ;;
         --purge)     DO_PURGE=1; shift ;;
         -h|--help)   usage ;;
         *)           die "未知参数: $1（用 --help 查看用法）" ;;
     esac
 done
+
+if [[ $DO_UNINSTALL -eq 0 ]]; then
+    [[ -n "$SRC_BINARY" ]] || die "请将二进制文件作为第一个参数：sudo $0 ./tunnel-server [--port 2222]"
+fi
 
 [[ $EUID -eq 0 ]] || die "请用 root 运行：sudo $0 $*"
 [[ $PORT =~ ^[0-9]{1,5}$ ]] && ((10#$PORT > 0 && 10#$PORT <= 65535)) || die "端口无效"
@@ -119,20 +126,9 @@ fi
 
 # ---------- 检查二进制 ----------
 # ---------- Binary checks ----------
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SRC_BINARY="$SCRIPT_DIR/$BINARY_NAME"
-
-if [[ ! -f "$SRC_BINARY" ]]; then
-    # 便于直接把脚本和二进制丢在同一目录：也接受不带平台后缀的名字。
-    # Also accept a name without a platform suffix for convenient colocated use.
-    if [[ -f "$SCRIPT_DIR/tunnel-server" ]]; then
-        SRC_BINARY="$SCRIPT_DIR/tunnel-server"
-    else
-        die "未找到二进制 $SRC_BINARY
-    请把 $BINARY_NAME 与本脚本放在同一目录，或用 --binary 指定文件名。
-    交叉编译命令见 DEPLOY.md §1："
-    fi
-fi
+[[ -f "$SRC_BINARY" ]] || die "未找到二进制文件：$SRC_BINARY"
+# Resolve relative paths from the caller's working directory, including bare filenames.
+SRC_BINARY="$(cd "$(dirname -- "$SRC_BINARY")" && pwd)/$(basename -- "$SRC_BINARY")"
 
 # 提前校验架构，避免装完才发现跑不起来。
 # Validate the architecture before installation to fail early.

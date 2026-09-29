@@ -47,7 +47,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 
 # 上传并一键安装
 scp deploy/install.sh tunnel-server-linux-amd64 user@your-server:~/
-ssh user@your-server 'chmod +x install.sh && sudo ./install.sh'
+ssh user@your-server 'chmod +x install.sh && sudo ./install.sh tunnel-server-linux-amd64'
 ```
 
 安装脚本会创建服务账户、生成主机密钥、配置 systemd 常驻与开机自启。

@@ -33,7 +33,7 @@ system SQLite installation.
 scp deploy/install.sh tunnel-server-linux-amd64 <user>@<server>:~/
 ssh <user>@<server>
 chmod +x install.sh
-sudo ./install.sh
+sudo ./install.sh tunnel-server-linux-amd64
 ```
 
 The installer creates the `tunnel` nologin account and prepares:

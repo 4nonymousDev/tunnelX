@@ -135,7 +135,7 @@ desktop/
   src/preload/       隔离的白名单 IPC 桥
   src/renderer/      Vue 3 界面
 deploy/
-  install.sh         新安装入口，已有实例转入升级脚本
+  install.sh         服务端安装入口，重复安装保留已有数据
 ```
 
 两层重连的职责划分体现在包边界上：`manager` 负责 SSH 连接本身的断线

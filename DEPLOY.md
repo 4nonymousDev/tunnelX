@@ -32,7 +32,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
 scp deploy/install.sh tunnel-server-linux-amd64 <user>@<server>:~/
 ssh <user>@<server>
 chmod +x install.sh
-sudo ./install.sh
+sudo ./install.sh tunnel-server-linux-amd64
 ```
 
 安装脚本创建 `tunnel` nologin 账户，并准备：

@@ -76,12 +76,33 @@ printf 'host-public\n' > "$key.pub"
         path.chmod(0o755)
 
     def install(self, *args, success=True):
-        result = subprocess.run([BASH, str(self.script), "--binary", "tunnel-server", *args], env=self.env, text=True, encoding="utf-8", errors="replace", capture_output=True)
+        return self.run_script("tunnel-server", *args, success=success)
+
+    def run_script(self, *args, success=True):
+        result = subprocess.run([BASH, str(self.script), *args], cwd=self.root, env=self.env, text=True, encoding="utf-8", errors="replace", capture_output=True)
         if success:
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         else:
             self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         return result
+
+    def test_binary_must_be_first_and_invalid_arguments_do_not_touch_service(self):
+        for args in ((), ("--binary", "tunnel-server"), ("--port", "3333", "tunnel-server"), ("missing-server",), ("tunnel-server", "extra")):
+            with self.subTest(args=args):
+                self.run_script(*args, success=False)
+                self.assertFalse((self.root / "systemctl.log").exists())
+        self.run_script("--help")
+        self.assertFalse((self.root / "systemctl.log").exists())
+
+    def test_binary_path_with_spaces_and_uninstall_without_binary(self):
+        source = self.root / "server build"
+        self.source.rename(source)
+        self.run_script(source.as_posix())
+        self.assertTrue((self.bin / "tunnel-server").exists())
+        self.run_script("--uninstall")
+        self.assertFalse((self.bin / "tunnel-server").exists())
+        self.assertTrue((self.config / "host_key").exists())
+        self.assertTrue((self.data / "authorized_keys").exists())
 
     def digest(self, path):
         return hashlib.sha256(path.read_bytes()).hexdigest()

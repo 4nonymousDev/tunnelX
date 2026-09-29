@@ -10,7 +10,7 @@
 - `TunnelX-<发布版本>-linux-arm64.tar.gz`：aarch64 / ARM64 服务器。
 - `SHA256SUMS-linux.txt`：两个压缩包的 SHA-256 校验值。
 
-每个 Linux 包包含 `tunnel-server`（内嵌新构建的管理页面）、`tunnelx-cli`、`install.sh` 及文档。选择与 `uname -m` 匹配的包，解压至空目录后运行 `sudo bash install.sh --binary tunnel-server`；首次和重复安装使用相同流程，沿用已有数据。CLI 可直接用 `./tunnelx-cli --help` 查看命令。CLI 的配置和状态目录应放在持久目录中，升级时继续指定原 `--config` / `--state-dir`，保留原密钥。
+每个 Linux 包包含 `tunnel-server`（内嵌新构建的管理页面）、`tunnelx-cli`、`install.sh` 及文档。选择与 `uname -m` 匹配的包，解压至空目录后运行 `sudo bash install.sh tunnel-server`；首次和重复安装使用相同流程，沿用已有数据。CLI 可直接用 `./tunnelx-cli --help` 查看命令。CLI 的配置和状态目录应放在持久目录中，升级时继续指定原 `--config` / `--state-dir`，保留原密钥。
 
 下载两个包和校验文件后，可运行 `sha256sum -c SHA256SUMS-linux.txt`；仅下载一个架构时使用 `sha256sum --ignore-missing -c SHA256SUMS-linux.txt`。压缩包名使用 Release 版本，内部 CLI/server 的核心版本来自 `CLI_VERSION`，可查看 `VERSION.txt`、`./tunnelx-cli version` 或 `./tunnel-server -version`。
 
@@ -22,11 +22,11 @@ Linux 发布在 Windows 发布成功后执行；上传前会用打包后的 amd6
 
 ```bash
 chmod +x install.sh
-sudo ./install.sh
+sudo ./install.sh tunnel-server
 ```
 
-默认隧道端口是 `2222`；可用 `--port 3333` 修改。ARM64 构建可通过
-`--binary tunnel-server-linux-arm64` 指定。脚本可重复执行，重复安装不会覆盖主机密钥、
+默认隧道端口是 `2222`；可用 `--port 3333` 修改。第一个参数必须是二进制文件，支持相对当前目录的路径或绝对路径。ARM64 示例：
+`sudo bash install.sh tunnel-server-linux-arm64`。脚本可重复执行，重复安装不会覆盖主机密钥、
 `authorized_keys` 或 SQLite 数据。每次安装均按本次参数写入服务配置，自定义端口需每次传入 `--port`。
 
 | 路径 | 用途 | 权限 |
@@ -73,7 +73,7 @@ sudo ./install.sh --uninstall --purge  # 删除配置与数据
 将新二进制和 `install.sh` 放在同一目录，按首次安装相同命令执行。例如使用自定义端口时，每次均运行：
 
 ```bash
-sudo bash install.sh --binary tunnel-server --port 3333
+sudo bash install.sh tunnel-server --port 3333
 ```
 
 脚本检查程序及现有授权文件，停服后将数据目录、配置目录、现有程序和 systemd 配置备份至 `/var/backups/tunnel-server/<时间>-<PID>/`，再原子替换程序并写入当前服务配置。运行中的服务和已停止的服务使用相同安装流程，不读取旧程序参数、不转换旧规则。自定义路径部署应直接替换二进制，并继续使用实际数据目录和密钥路径。

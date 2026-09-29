@@ -8,7 +8,7 @@ Pushing a new `v*` tag publishes Windows assets and two Linux archives in the sa
 - `TunnelX-<release-version>-linux-arm64.tar.gz` for aarch64 / ARM64.
 - `SHA256SUMS-linux.txt` with checksums for both archives.
 
-Each Linux archive contains `tunnel-server` with a freshly built admin UI, `tunnelx-cli`, `install.sh` and documentation. Choose the architecture matching `uname -m`, extract into an empty directory, then run `sudo bash install.sh --binary tunnel-server`. First and repeated installations use the same flow and retain existing data. Run `./tunnelx-cli --help` for CLI commands. Keep CLI configuration and state in persistent directories and reuse the original `--config` / `--state-dir` and keys when upgrading.
+Each Linux archive contains `tunnel-server` with a freshly built admin UI, `tunnelx-cli`, `install.sh` and documentation. Choose the architecture matching `uname -m`, extract into an empty directory, then run `sudo bash install.sh tunnel-server`. First and repeated installations use the same flow and retain existing data. Run `./tunnelx-cli --help` for CLI commands. Keep CLI configuration and state in persistent directories and reuse the original `--config` / `--state-dir` and keys when upgrading.
 
 Download both archives and the checksum file, then run `sha256sum -c SHA256SUMS-linux.txt`. When downloading only one architecture, use `sha256sum --ignore-missing -c SHA256SUMS-linux.txt`. Archive names use the Release version; the bundled CLI/server use `CLI_VERSION`. See `VERSION.txt`, `./tunnelx-cli version` or `./tunnel-server -version`.
 
@@ -21,11 +21,11 @@ in the same directory, then run:
 
 ```bash
 chmod +x install.sh
-sudo ./install.sh
+sudo ./install.sh tunnel-server
 ```
 
-The default tunnel port is `2222`; use `--port 3333` to change it. For an ARM64
-build, select the file with `--binary tunnel-server-linux-arm64`. The installer
+The default tunnel port is `2222`; use `--port 3333` to change it. The first argument must be the binary file, using an absolute path or a path relative to the current directory. For ARM64, run
+`sudo bash install.sh tunnel-server-linux-arm64`. The installer
 retains the host key, `authorized_keys` and SQLite data. Every installation writes the current service configuration; pass a custom `--port` on every run.
 
 | Path | Purpose | Mode |
@@ -74,7 +74,7 @@ See [DEPLOY.en.md](../DEPLOY.en.md) for the complete guide.
 Place the new binary beside `install.sh` and use the same installation command, including the desired port on every run:
 
 ```bash
-sudo bash install.sh --binary tunnel-server --port 3333
+sudo bash install.sh tunnel-server --port 3333
 ```
 
 The installer validates the executable and authorization file, stops the service, backs up the complete data/config directories, program and service configuration under `/var/backups/tunnel-server/<timestamp>-<PID>/`, then atomically replaces the program and writes the current service definition. Running and stopped services follow the same flow. No old arguments or historical rules are converted. Custom deployments should replace the binary directly while keeping their actual data and key paths.
