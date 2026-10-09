@@ -23,7 +23,7 @@ TunnelX is an SSH port-forwarding tool for remote development and debugging. It 
 - The Windows desktop application uses Electron and Vue and talks to the standalone Go core through a local API.
 - The client, CLI, and server can all be built as single files and do not depend on the system OpenSSH installation.
 - The server embeds a management REST API and Vue admin console in one binary, with history and audit data persisted in SQLite.
-- The console's Traffic page shows live Exporter-to-Importer connections with independent Y axes: node height represents each device's aggregate bandwidth, and line width represents the pair's bidirectional bandwidth. Separate cumulative rankings for each role cover only the current server run and reset on restart. Sampling runs every second and the page refreshes every two seconds; counts include payload bytes, excluding SSH/TCP overhead.
+- The console's Traffic page shows a live Exporter-to-Importer Sankey diagram: nodes and flow bands share one scale for bidirectional bandwidth, with exporter filtering, flow highlighting, and connection details. All connections within the filter are shown; idle connections use dashed lines. Separate cumulative rankings for each role cover only the current server run and reset on restart. Sampling runs every second and the page refreshes every two seconds; counts include payload bytes, excluding SSH/TCP overhead.
 - Importers bind a verified device, public key, and tunnel ID, checking the current session and publication generation on each connection.
 - The server provides no shell and accepts no arbitrary server-address or TCP-port forwarding.
 

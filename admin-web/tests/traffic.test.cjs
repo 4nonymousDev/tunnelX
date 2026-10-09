@@ -16,40 +16,71 @@ const utils = load('utils/traffic.ts')
 const device = id => ({ id, name: id })
 const link = (e, i, rate) => ({ exporter: device(e), importer: device(i), bytes_per_second: rate, connections: 1 })
 
-test('fan-out nodes sum edges and each side has an independent scale', () => {
+test('fan-out nodes sum edges and importers aggregate multiple exporters', () => {
   const links = [link('e', 'i1', 200), link('e', 'i2', 300)]
   const exporters = utils.trafficNodes(links, 'exporter')
   const importers = utils.trafficNodes(links, 'importer')
   assert.equal(exporters[0].rate, 500)
   assert.equal(importers[0].rate, 300)
   assert.equal(exporters[0].connections, 2)
-  assert.notEqual(utils.trafficScale(500).max, utils.trafficScale(300).max)
   const multi = utils.trafficNodes([...links, link('e2', 'i1', 400)], 'importer')
   assert.equal(multi[0].rate, 600)
 })
 
-test('scales include zero and their maximum, including idle and large transfers', () => {
-  for (const value of [0, .02, 1, 20, 123456789]) {
-    const scale = utils.trafficScale(value)
-    assert.equal(scale.ticks[0], 0)
-    assert.equal(scale.ticks.at(-1), scale.max)
-    assert.ok(scale.max >= value)
-    assert.ok(scale.ticks.length <= 6)
-  }
+test('traffic formatting handles idle, fractional and large transfers', () => {
   assert.equal(utils.formatRate(1048576), '1 MiB/s')
   assert.equal(utils.formatBytes(0), '0 B')
+  assert.equal(utils.formatRate(.5), '0.5 B/s')
 })
 
-test('equal-bandwidth nodes preserve exact Y values without overlapping labels', () => {
-  for (const rate of [0, 100]) {
-    const nodes = Array.from({ length: 16 }, (_, i) => ({ ...device(`n${i}`), rate, connections: 1 }))
-    const positioned = utils.positionNodes(nodes, 100, 652, true)
-    assert.equal(new Set(positioned.map(n => n.y)).size, 1)
-    assert.equal(new Set(positioned.map(n => n.x)).size, 16)
-    assert.ok(positioned[0].labelY >= 66)
-    assert.ok(positioned.at(-1).labelY <= 590)
-    for (let i = 1; i < positioned.length; i++) assert.ok(positioned[i].labelY - positioned[i - 1].labelY >= 32)
+test('Sankey bands conserve node throughput and share one scale at both ends', () => {
+  const links = [link('e1', 'i1', 200), link('e1', 'i2', 300), link('e2', 'i2', 100)]
+  const graph = utils.trafficSankey(links)
+  assert.ok(graph.scale > 0)
+  assert.equal(graph.edges.length, 3)
+  for (const [nodes, side, offset] of [[graph.exporters, 'exporter', 'sourceY'], [graph.importers, 'importer', 'targetY']]) {
+    for (const node of nodes) {
+      const bands = graph.edges.filter(edge => edge[side].id === node.id)
+      assert.ok(Math.abs(bands.reduce((sum, edge) => sum + edge.width, 0) - node.height) < 1e-8)
+      assert.ok(Math.abs(node.height - node.rate * graph.scale) < 1e-8)
+      let end = node.y
+      for (const edge of bands) {
+        assert.ok(Math.abs(edge[offset] - end) < 1e-8)
+        end += edge.width
+      }
+      assert.ok(end <= node.y + node.height + 1e-8)
+    }
   }
+  assert.ok(Math.abs(graph.edges[0].width / graph.edges[1].width - 2 / 3) < 1e-8)
+})
+
+test('Sankey includes all connections and leaves room for labels, including idle nodes', () => {
+  for (const rate of [0, .02, 100000000]) {
+    const links = Array.from({ length: 40 }, (_, i) => link('e', `i${i}`, rate))
+    const graph = utils.trafficSankey(links)
+    assert.equal(graph.edges.length, 40)
+    assert.equal(graph.importers.length, 40)
+    for (const nodes of [graph.exporters, graph.importers]) {
+      for (let i = 0; i < nodes.length; i++) {
+        assert.ok(nodes[i].y >= 64)
+        assert.ok(nodes[i].y + nodes[i].height <= graph.height - 36 + 1e-8)
+        if (i) assert.ok(nodes[i].labelY - nodes[i - 1].labelY >= 32)
+      }
+    }
+    if (!rate) for (const edge of graph.edges) assert.equal(edge.width, 0)
+    assert.ok(graph.edges.every(edge => !/NaN|Infinity/.test(edge.path)))
+  }
+  assert.equal(utils.trafficSankey([]).edges.length, 0)
+})
+
+test('Sankey filters conserve visible flow and distinguish the same device on both sides', () => {
+  const links = [link('same', 'same', 150), link('other', 'same', 250)]
+  const filtered = utils.trafficSankey(links.filter(edge => edge.exporter.id === 'same'))
+  assert.equal(filtered.exporters[0].rate, 150)
+  assert.equal(filtered.importers[0].rate, 150)
+  assert.notEqual(filtered.exporters[0].x, filtered.importers[0].x)
+  const reversed = utils.trafficSankey([...links].reverse())
+  assert.equal(JSON.stringify(reversed), JSON.stringify(utils.trafficSankey(links)))
 })
 
 function harness(fetchSnapshot) {
