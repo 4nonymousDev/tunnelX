@@ -137,6 +137,8 @@ func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request, rid string) {
 	}
 	escaped := r.URL.EscapedPath()
 	switch {
+	case escaped == "/api/v1/traffic/history":
+		s.serveTrafficHistory(w, r, rid)
 	case escaped == "/api/v1/traffic":
 		if !allow(w, r, rid, http.MethodGet) {
 			return

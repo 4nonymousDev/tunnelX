@@ -1,5 +1,5 @@
 import { computed, onUnmounted, readonly, shallowRef } from 'vue'
-import type { TrafficSnapshot } from '../types/traffic'
+import type { TrafficHistory, TrafficSnapshot } from '../types/traffic'
 import type {
   AdminActionDto,
   ApiErrorBody,
@@ -426,6 +426,7 @@ export function useAdminApi() {
 
   return {
     fetchTraffic: () => request<TrafficSnapshot>('/traffic'),
+    fetchTrafficHistory: (from: string, to: string, signal?: AbortSignal) => request<TrafficHistory>(`/traffic/history?${new URLSearchParams({ from, to })}`, { signal }),
     authenticated, username, restoringSession: readonly(restoringSession), authBusy: readonly(authBusy),
     overview: readonly(overview), sessions: readonly(sessions), clients: readonly(clients),
     clientDetail: readonly(clientDetail), auditPage: readonly(auditPage), adminActions: readonly(adminActions),

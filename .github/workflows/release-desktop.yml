@@ -138,9 +138,8 @@ jobs:
       - name: Build and test embedded admin UI
         working-directory: admin-web
         run: |
-          npm ci
-          npm test
           npm run build
+          npm test
       - name: Build Linux amd64 and arm64 packages
         run: bash .github/scripts/build-linux-release.sh "$RELEASE_TAG" "$RUNNER_TEMP/linux-release"
       - name: Test packaged amd64 binaries

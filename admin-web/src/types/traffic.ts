@@ -6,7 +6,18 @@ export interface TrafficLink {
   connections: number
 }
 export interface TrafficTotal extends TrafficDevice { bytes: number }
+export interface TrafficHistory {
+  from: string
+  to: string
+  persisted_at: string
+  exporters: TrafficTotal[]
+  importers: TrafficTotal[]
+}
+export interface TrafficRange { from: string; to: string; label: string }
 export interface TrafficSnapshot {
+  persistent: boolean
+  persistence_healthy: boolean
+  persisted_at: string | null
   sampled_at: string
   since: string
   links: TrafficLink[]

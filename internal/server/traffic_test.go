@@ -92,7 +92,7 @@ func TestTrafficConcurrentTransfers(t *testing.T) {
 	}
 }
 
-func TestTrafficResetsOnServerRestart(t *testing.T) {
+func TestTrafficPersistsAndAccumulatesOnServerRestart(t *testing.T) {
 	cfg := managementConfig(t)
 	s, err := New(cfg, nil)
 	if err != nil {
@@ -113,8 +113,26 @@ func TestTrafficResetsOnServerRestart(t *testing.T) {
 	}
 	defer next.Close()
 	v, err := (*adminBackend)(next).Traffic(context.Background())
-	if err != nil || len(v.Exporters) != 0 || len(v.Importers) != 0 || len(v.Links) != 0 || v.Since.Before(s.traffic.since) {
-		t.Fatalf("new run inherited old totals: %+v %v", v, err)
+	if err != nil || len(v.Exporters) != 1 || len(v.Importers) != 1 || len(v.Links) != 0 || !v.Since.Equal(s.traffic.since) || !v.Persistent || !v.PersistenceHealthy || v.PersistedAt == nil {
+		t.Fatalf("new run did not restore history: %+v %v", v, err)
+	}
+	if v.Exporters[0].Bytes != 1234 || v.Importers[0].Bytes != 1234 {
+		t.Fatalf("restored bytes: %+v", v)
+	}
+	p, done = next.traffic.begin(session.Session{ClientID: "exporter"}, session.Session{ClientID: "importer"})
+	p.bytes.Add(66)
+	done()
+	if err = next.Close(); err != nil {
+		t.Fatal(err)
+	}
+	third, err := New(cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer third.Close()
+	v = third.traffic.snapshot()
+	if len(v.Exporters) != 1 || len(v.Importers) != 1 || v.Exporters[0].Bytes != 1300 || v.Importers[0].Bytes != 1300 {
+		t.Fatalf("history did not accumulate: %+v", v)
 	}
 }
 

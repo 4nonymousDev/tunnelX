@@ -61,6 +61,8 @@ type Server struct {
 	traffic                 *trafficMeter
 	trafficStop             chan struct{}
 	trafficDone             chan struct{}
+	trafficSaveDone         chan struct{}
+	trafficSaveErr          error
 }
 
 func New(cfg Config, logf func(string, ...any)) (*Server, error) {
@@ -158,13 +160,31 @@ func New(cfg Config, logf func(string, ...any)) (*Server, error) {
 	}}
 	s.sshCfg.AddHostKey(hostKey)
 	s.traffic = newTrafficMeter(time.Now())
+	if s.store != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		since, saved, totals, err := s.store.LoadTraffic(ctx)
+		cancel()
+		if err != nil {
+			s.cleanupNew()
+			return nil, fmt.Errorf("加载历史流量: %w", err)
+		}
+		s.traffic.since, s.traffic.persistedAt, s.traffic.persistent = since, &saved, true
+		for _, v := range totals {
+			s.traffic.totals[trafficTotalKey{v.Role, v.ClientID}] = adminapi.TrafficTotal{TrafficDevice: adminapi.TrafficDevice{ID: v.ClientID, Name: v.Name}, Bytes: v.Bytes}
+		}
+	}
 	s.trafficStop, s.trafficDone = make(chan struct{}), make(chan struct{})
+	s.trafficSaveDone = make(chan struct{})
 	go s.runTraffic()
+	go s.runTrafficPersistence()
 	go s.runAuditJobs()
 	return s, nil
 }
 
 func (s *Server) cleanupNew() {
+	if s.adminAPI != nil {
+		_ = s.adminAPI.Close()
+	}
 	if s.store != nil {
 		_ = s.store.Close()
 	}
@@ -269,8 +289,10 @@ func (s *Server) Close() error {
 		<-s.auditDone
 		close(s.trafficStop)
 		<-s.trafficDone
+		<-s.trafficSaveDone
+		s.closeErr = s.trafficSaveErr
 		if s.store != nil {
-			s.closeErr = s.store.Close()
+			s.closeErr = errors.Join(s.closeErr, s.store.Close())
 		}
 	})
 	return s.closeErr

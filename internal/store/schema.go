@@ -22,6 +22,10 @@ func (s *Store) initialize(ctx context.Context) error {
 }
 
 var schema = []string{
+	`CREATE TABLE IF NOT EXISTS traffic_history_state(id INTEGER PRIMARY KEY CHECK(id=1),initialized_at INTEGER NOT NULL)`,
+	`CREATE TABLE IF NOT EXISTS traffic_buckets(bucket_at INTEGER NOT NULL,role TEXT NOT NULL CHECK(role IN ('exporter','importer')),client_id TEXT NOT NULL,run_id TEXT NOT NULL,bytes INTEGER NOT NULL CHECK(bytes>=0),PRIMARY KEY(bucket_at,role,client_id,run_id))`,
+	`CREATE TABLE IF NOT EXISTS traffic_state(id INTEGER PRIMARY KEY CHECK(id=1),since_at INTEGER NOT NULL,persisted_at INTEGER NOT NULL)`,
+	`CREATE TABLE IF NOT EXISTS traffic_totals(role TEXT NOT NULL CHECK(role IN ('exporter','importer')),client_id TEXT NOT NULL,name TEXT NOT NULL,bytes INTEGER NOT NULL CHECK(bytes>=0),PRIMARY KEY(role,client_id))`,
 	`CREATE TABLE IF NOT EXISTS clients(fingerprint TEXT PRIMARY KEY,note TEXT NOT NULL DEFAULT '',first_seen_at INTEGER NOT NULL,last_seen_at INTEGER NOT NULL,last_ip TEXT NOT NULL DEFAULT '',last_client_id TEXT NOT NULL DEFAULT '',last_reported_name TEXT NOT NULL DEFAULT '',last_role TEXT NOT NULL DEFAULT '',last_version TEXT NOT NULL DEFAULT '',username TEXT NOT NULL DEFAULT '',email TEXT NOT NULL DEFAULT '',computer_name TEXT NOT NULL DEFAULT '')`,
 	`CREATE TABLE IF NOT EXISTS blacklist(fingerprint TEXT PRIMARY KEY,reason TEXT NOT NULL,operator TEXT NOT NULL,created_at INTEGER NOT NULL,expires_at INTEGER NULL)`,
 	`CREATE TABLE IF NOT EXISTS connection_audit(id INTEGER PRIMARY KEY AUTOINCREMENT,session_id TEXT NULL,fingerprint TEXT NOT NULL DEFAULT '',client_id TEXT NOT NULL DEFAULT '',remote_ip TEXT NOT NULL DEFAULT '',authenticated_at INTEGER NOT NULL,hello_at INTEGER NULL,disconnected_at INTEGER NULL,result TEXT NOT NULL,disconnect_reason TEXT NOT NULL DEFAULT '',reported_name TEXT NOT NULL DEFAULT '',role TEXT NOT NULL DEFAULT '',version TEXT NOT NULL DEFAULT '')`,

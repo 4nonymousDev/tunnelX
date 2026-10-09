@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
 	"io"
 	"sort"
 	"sync"
@@ -10,6 +11,7 @@ import (
 
 	"tunnelx/internal/adminapi"
 	"tunnelx/internal/session"
+	"tunnelx/internal/store"
 )
 
 type trafficPairKey struct{ exporter, importer string }
@@ -20,16 +22,26 @@ type trafficPair struct {
 	active             int
 }
 type trafficTotalKey struct{ role, id string }
+type trafficBucketKey struct {
+	trafficTotalKey
+	at time.Time
+}
 type trafficMeter struct {
-	mu               sync.Mutex
-	pairs            map[trafficPairKey]*trafficPair
-	totals           map[trafficTotalKey]adminapi.TrafficTotal
-	since, sampledAt time.Time
-	links            []adminapi.TrafficLink
+	mu                             sync.Mutex
+	pairs                          map[trafficPairKey]*trafficPair
+	totals                         map[trafficTotalKey]adminapi.TrafficTotal
+	since, sampledAt               time.Time
+	links                          []adminapi.TrafficLink
+	dirty                          map[trafficTotalKey]bool
+	persistent, persistenceHealthy bool
+	persistedAt                    *time.Time
+	runID                          string
+	buckets                        map[trafficBucketKey]int64
+	dirtyBuckets                   map[trafficBucketKey]bool
 }
 
 func newTrafficMeter(now time.Time) *trafficMeter {
-	return &trafficMeter{pairs: make(map[trafficPairKey]*trafficPair), totals: make(map[trafficTotalKey]adminapi.TrafficTotal), since: now, sampledAt: now, links: []adminapi.TrafficLink{}}
+	return &trafficMeter{pairs: make(map[trafficPairKey]*trafficPair), totals: make(map[trafficTotalKey]adminapi.TrafficTotal), dirty: make(map[trafficTotalKey]bool), runID: rand.Text(), buckets: make(map[trafficBucketKey]int64), dirtyBuckets: make(map[trafficBucketKey]bool), persistenceHealthy: true, since: now, sampledAt: now, links: []adminapi.TrafficLink{}}
 }
 
 func trafficDevice(s session.Session) adminapi.TrafficDevice {
@@ -86,11 +98,17 @@ func (m *trafficMeter) sample(now time.Time) {
 		p.previous = current
 		for role, device := range map[string]adminapi.TrafficDevice{"exporter": p.exporter, "importer": p.importer} {
 			k := trafficTotalKey{role, device.ID}
+			if delta > 0 && m.persistent {
+				bucket := trafficBucketKey{k, now.UTC().Truncate(store.TrafficBucketDuration)}
+				m.buckets[bucket] += delta
+				m.dirtyBuckets[bucket] = true
+			}
 			v := m.totals[k]
 			if delta != 0 || v.Name != device.Name {
 				v.TrafficDevice = device
 				v.Bytes += delta
 				m.totals[k] = v
+				m.dirty[k] = true
 			}
 		}
 		if p.active > 0 || delta > 0 {
@@ -119,6 +137,11 @@ func (m *trafficMeter) snapshot() adminapi.TrafficSnapshot {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	v := adminapi.TrafficSnapshot{SampledAt: m.sampledAt, Since: m.since, Links: append([]adminapi.TrafficLink{}, m.links...), Exporters: []adminapi.TrafficTotal{}, Importers: []adminapi.TrafficTotal{}}
+	v.Persistent, v.PersistenceHealthy = m.persistent, m.persistenceHealthy
+	if m.persistedAt != nil {
+		saved := *m.persistedAt
+		v.PersistedAt = &saved
+	}
 	for key, total := range m.totals {
 		if key.role == "exporter" {
 			v.Exporters = append(v.Exporters, total)
@@ -154,6 +177,75 @@ func (s *Server) runTraffic() {
 			s.traffic.sample(time.Now())
 		case <-s.trafficStop:
 			s.traffic.sample(time.Now())
+			return
+		}
+	}
+}
+
+func (s *Server) flushTraffic() error {
+	if s.store == nil {
+		return nil
+	}
+	m := s.traffic
+	m.mu.Lock()
+	batch := make([]store.TrafficTotal, 0, len(m.dirty))
+	for key := range m.dirty {
+		v := m.totals[key]
+		batch = append(batch, store.TrafficTotal{Role: key.role, ClientID: key.id, Name: v.Name, Bytes: v.Bytes})
+	}
+	at := m.sampledAt
+	buckets := make([]store.TrafficBucket, 0, len(m.dirtyBuckets))
+	for key := range m.dirtyBuckets {
+		buckets = append(buckets, store.TrafficBucket{Role: key.role, ClientID: key.id, RunID: m.runID, At: key.at, Bytes: m.buckets[key]})
+	}
+	m.mu.Unlock()
+	if len(batch) == 0 {
+		return nil
+	}
+	ctx, cancel := s.dbContext()
+	err := s.store.SaveTraffic(ctx, batch, buckets, at)
+	cancel()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.persistenceHealthy = err == nil
+	if err == nil {
+		m.persistedAt = &at
+		for _, v := range batch {
+			key := trafficTotalKey{v.Role, v.ClientID}
+			if current := m.totals[key]; current.Bytes == v.Bytes && current.Name == v.Name {
+				delete(m.dirty, key)
+			}
+		}
+		for _, v := range buckets {
+			key := trafficBucketKey{trafficTotalKey{v.Role, v.ClientID}, v.At}
+			if m.buckets[key] == v.Bytes {
+				delete(m.dirtyBuckets, key)
+			}
+		}
+		for key := range m.buckets {
+			if key.at.Before(m.sampledAt.UTC().Truncate(store.TrafficBucketDuration)) && !m.dirtyBuckets[key] {
+				delete(m.buckets, key)
+			}
+		}
+	}
+	return err
+}
+
+// Separate disk writes from the one-second sampler so slow storage cannot
+// block forwarding or live snapshots. A failed batch stays dirty for retry.
+func (s *Server) runTrafficPersistence() {
+	defer close(s.trafficSaveDone)
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			if err := s.flushTraffic(); err != nil {
+				s.limitedLog("历史流量保存失败: %v", err)
+			}
+		case <-s.trafficStop:
+			<-s.trafficDone
+			s.trafficSaveErr = s.flushTraffic()
 			return
 		}
 	}

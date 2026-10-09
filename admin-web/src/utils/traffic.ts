@@ -35,10 +35,12 @@ export interface SankeyNode extends TrafficNode {
 // Two-column Sankey: one shared linear scale, and disjoint source/target
 // slots whose heights sum to their node's throughput. Label space is kept
 // outside the measured flow area; zero-rate links never acquire fake volume.
-export function trafficSankey(links: readonly TrafficLink[]) {
+export function trafficSankey(links: readonly TrafficLink[], viewport?: { width: number; height: number }) {
   const left = trafficNodes(links, 'exporter').sort((a, b) => a.id.localeCompare(b.id))
   const right = trafficNodes(links, 'importer').sort((a, b) => a.id.localeCompare(b.id))
-  const height = Math.max(420, Math.max(left.length, right.length) * 52 + 100)
+  const width = Math.max(300, viewport?.width ?? 1000)
+  const height = Math.max(152, viewport?.height ?? Math.max(420, Math.max(left.length, right.length) * 52 + 100))
+  const leftX = Math.min(220, width * .25), rightX = width - leftX - 18
   const top = 64, available = height - top - 36, gap = 20, minSlot = 32
   const total = left.reduce((sum, node) => sum + node.rate, 0)
   function used(nodes: TrafficNode[], scale: number) {
@@ -61,7 +63,7 @@ export function trafficSankey(links: readonly TrafficLink[]) {
       return { ...node, x, y: labelY - flowHeight / 2, height: flowHeight, labelY }
     })
   }
-  const exporters = position(left, 220), importers = position(right, 762)
+  const exporters = position(left, leftX), importers = position(right, rightX)
   const sources = new Map(exporters.map(node => [node.id, node]))
   const targets = new Map(importers.map(node => [node.id, node]))
   const sourceOffsets = new Map<string, number>(), targetOffsets = new Map<string, number>()
@@ -74,9 +76,10 @@ export function trafficSankey(links: readonly TrafficLink[]) {
     sourceOffsets.set(source.id, (sourceOffsets.get(source.id) ?? 0) + width)
     targetOffsets.set(target.id, (targetOffsets.get(target.id) ?? 0) + width)
     const x1 = source.x + 18, x2 = target.x
-    const centerPath = `M ${x1} ${sy + width / 2} C 430 ${sy + width / 2}, 570 ${ty + width / 2}, ${x2} ${ty + width / 2}`
-    const path = `M ${x1} ${sy} C 430 ${sy}, 570 ${ty}, ${x2} ${ty} L ${x2} ${ty + width} C 570 ${ty + width}, 430 ${sy + width}, ${x1} ${sy + width} Z`
+    const bend1 = x1 + (x2 - x1) * .37, bend2 = x2 - (x2 - x1) * .37
+    const centerPath = `M ${x1} ${sy + width / 2} C ${bend1} ${sy + width / 2}, ${bend2} ${ty + width / 2}, ${x2} ${ty + width / 2}`
+    const path = `M ${x1} ${sy} C ${bend1} ${sy}, ${bend2} ${ty}, ${x2} ${ty} L ${x2} ${ty + width} C ${bend2} ${ty + width}, ${bend1} ${sy + width}, ${x1} ${sy + width} Z`
     return { ...link, key: trafficLinkKey(link), width, sourceY: sy, targetY: ty, path, centerPath }
   })
-  return { height, scale, exporters, importers, edges }
+  return { width, height, leftX, rightX, scale, exporters, importers, edges }
 }

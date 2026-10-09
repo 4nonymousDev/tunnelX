@@ -7,7 +7,7 @@
     "dev": "vite",
     "typecheck": "vue-tsc --noEmit",
     "test": "node --test tests/*.test.cjs",
-    "build": "vue-tsc --noEmit && vite build"
+    "build": "npm ci && npm run typecheck && vite build"
   },
   "dependencies": {
     "@vitejs/plugin-vue": "6.0.8",
