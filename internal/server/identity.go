@@ -65,25 +65,6 @@ func (s *Server) handshake(sid string, conn *ssh.ServerConn, pc *proto.Conn) boo
 		s.sendErr(conn, pc, code, "设备标识与公钥需要管理员核验")
 		return false
 	}
-	if s.store != nil {
-		s.mu.Lock()
-		auditID := s.auditIDs[sid]
-		s.mu.Unlock()
-		now := time.Now().UTC()
-		ctx, cancel := s.dbContext()
-		err = s.persistClientSession(sid, func() error {
-			return s.store.UpsertClient(ctx, store.Seen{Fingerprint: current.Fingerprint, ClientID: h.ID, ReportedName: h.Name, Role: h.Role, Version: h.ClientVersion, At: now})
-		})
-		if err == nil {
-			err = s.store.CompleteHello(ctx, auditID, store.ConnectionAudit{ClientID: h.ID, HelloAt: &now, Result: "online", ReportedName: h.Name, Role: h.Role, Version: h.ClientVersion})
-		}
-		cancel()
-		if err != nil {
-			s.sendErr(conn, pc, proto.CodeInternalError, "无法持久化会话")
-			return false
-		}
-		s.notifyAudit(auditID)
-	}
 	admitted, err := s.policy.AdmitVersion(current.Fingerprint, version, func() error {
 		return s.sessions.CompleteHello(sid, session.Hello{ClientID: h.ID, Name: h.Name, Role: h.Role, Version: h.ClientVersion})
 	})
@@ -93,9 +74,33 @@ func (s *Server) handshake(sid string, conn *ssh.ServerConn, pc *proto.Conn) boo
 			code = proto.CodeDuplicateID
 		}
 		s.sendErr(conn, pc, code, "会话登记失败或授权状态已改变")
+		if code == proto.CodeDuplicateID {
+			s.sessions.Disconnect(sid, "duplicate_id")
+		}
 		return false
 	}
 	s.cancelHelloTimer(sid)
+	// Only admitted sessions may replace the active client's reported metadata
+	// or be recorded as online. A duplicate leaves its healthy owner untouched.
+	if s.store != nil {
+		s.mu.Lock()
+		auditID := s.auditIDs[sid]
+		s.mu.Unlock()
+		now := time.Now().UTC()
+		ctx, cancel := s.dbContext()
+		err = s.persistClientSession(sid, func() error {
+			if e := s.store.UpsertClient(ctx, store.Seen{Fingerprint: current.Fingerprint, ClientID: h.ID, ReportedName: h.Name, Role: h.Role, Version: h.ClientVersion, At: now}); e != nil {
+				return e
+			}
+			return s.store.CompleteHello(ctx, auditID, store.ConnectionAudit{ClientID: h.ID, HelloAt: &now, Result: "online", ReportedName: h.Name, Role: h.Role, Version: h.ClientVersion})
+		})
+		cancel()
+		if err != nil {
+			s.sendErr(conn, pc, proto.CodeInternalError, "无法持久化会话")
+			return false
+		}
+		s.notifyAudit(auditID)
+	}
 	if s.sendControl(conn, pc, proto.HelloOK{V: proto.Version, Type: proto.TypeHelloOK, ServerVersion: s.cfg.Version, SessionID: sid, Fingerprint: current.Fingerprint}) != nil {
 		return false
 	}

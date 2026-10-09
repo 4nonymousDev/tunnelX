@@ -189,6 +189,14 @@ fails. Successful startup does not imply a successful server connection. Logs co
 to rotate in `tunnelx.log` under the state directory; follow them with `logs --follow`.
 `stop` shuts down the core, while `disconnect` leaves the process running.
 
+The connected log means both SSH authentication and device registration succeeded.
+Clients and servers probe every 15 seconds and close a transport after 60 seconds
+without a heartbeat reply. When a device ID is occupied, the client retries every
+5–10 seconds for up to two minutes from the first conflict, allowing stale sessions
+left by a network outage or restart to clear. Persistent conflicts stop automatic
+retries; check other client instances before running `connect` again. Retries never
+evict a healthy connection using the same ID.
+
 Confirm the host key in the foreground first and reuse the same configuration and
 state directory, or pass `--accept-host-key SHA256:verified-fingerprint`. Without a
 fingerprint, background mode handles confirmations through the local API: inspect

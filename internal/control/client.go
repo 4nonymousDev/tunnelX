@@ -190,19 +190,13 @@ func (c *Client) request(msg any, wantType string, out any) error {
 		return err
 	}
 
-	select {
-	case <-c.done:
-		if err := c.Cause(); err != nil {
-			return err
-		}
-		return errors.New("控制通道已关闭")
+	responseTimer := time.NewTimer(respTimeout)
+	defer responseTimer.Stop()
+	return c.awaitResponse(responseTimer.C, wantType, out)
+}
 
-	case <-time.After(respTimeout):
-		err := fmt.Errorf("等待服务端应答超时（%s）", respTimeout)
-		c.fail(err)
-		return err
-
-	case r := <-c.respCh:
+func (c *Client) awaitResponse(timeout <-chan time.Time, wantType string, out any) error {
+	decode := func(r respond) error {
 		if r.env.Type == proto.TypeError {
 			var e proto.Error
 			if err := proto.Decode(r.raw, &e); err != nil {
@@ -220,6 +214,33 @@ func (c *Client) request(msg any, wantType string, out any) error {
 		}
 		return nil
 	}
+
+	var err error
+	timedOut := false
+	select {
+	case r := <-c.respCh:
+		return decode(r)
+	case <-c.done:
+		err = c.Cause()
+		if err == nil {
+			err = errors.New("控制通道已关闭")
+		}
+	case <-timeout:
+		err = fmt.Errorf("等待服务端应答超时（%s）", respTimeout)
+		timedOut = true
+	}
+	// readLoop may queue the server's error and then observe EOF before the
+	// requester resumes. Preserve that reply even when closure or expiry wins
+	// the select; otherwise duplicate_id would become an ordinary network error.
+	select {
+	case r := <-c.respCh:
+		return decode(r)
+	default:
+	}
+	if timedOut {
+		c.fail(err)
+	}
+	return err
 }
 
 // readLoop 持续读取服务端消息。

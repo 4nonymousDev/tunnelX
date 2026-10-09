@@ -9,6 +9,7 @@ import (
 	"golang.org/x/crypto/ssh"
 	"tunnelx/internal/proto"
 	"tunnelx/internal/session"
+	"tunnelx/internal/sshkeepalive"
 )
 
 func (s *Server) serveControl(sid string, conn *ssh.ServerConn, ch ssh.Channel, rate *rateBucket) {
@@ -19,11 +20,23 @@ func (s *Server) serveControl(sid string, conn *ssh.ServerConn, ch ssh.Channel, 
 	updates, unsub := s.sessions.Subscribe()
 	defer unsub()
 	done := make(chan struct{})
-	var writer sync.WaitGroup
-	writer.Add(1)
-	defer func() { close(done); _ = conn.Close(); writer.Wait() }()
+	var workers sync.WaitGroup
+	workers.Add(2)
+	defer func() { close(done); _ = conn.Close(); workers.Wait() }()
 	go func() {
-		defer writer.Done()
+		defer workers.Done()
+		sshkeepalive.Run(conn, done, s.cfg.HeartbeatInterval, s.cfg.HeartbeatTimeout, func(err error) {
+			reason := "heartbeat_failed"
+			if errors.Is(err, sshkeepalive.ErrTimeout) {
+				reason = "heartbeat_timeout"
+			}
+			if s.sessions.Disconnect(sid, reason) {
+				s.logf("会话 %s 心跳失败，已关闭连接: %v", sid, err)
+			}
+		})
+	}()
+	go func() {
+		defer workers.Done()
 		defer conn.Close()
 		if s.pushRegistry(sid, conn, pc) != nil {
 			return

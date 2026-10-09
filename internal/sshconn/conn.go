@@ -19,27 +19,21 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"tunnelx/internal/logbuf"
+	"tunnelx/internal/sshkeepalive"
 	"tunnelx/internal/tunnel"
 )
 
 // 心跳参数。
 // TCP 连接断开未必立刻报错——对端断电、拔网线、NAT 丢弃映射时，本地 socket 可能
 // 长时间"看起来正常"。必须主动心跳。
-// 15s×3 约 45 秒内发现断线。现有脚本是 30s×3（约 90 秒），对远程开发调试太慢；
-// 更激进（如 10s×2）则易被网络抖动误判。
+// 每 15 秒探活，60 秒未收到回复就关闭连接；发送或等待回复阻塞也会超时。
 // Heartbeat parameters.
 // A broken TCP connection may not fail immediately after power loss, cable removal,
-// or an expired NAT mapping, so active heartbeats are required. 15s x 3 detects a
-// failure in about 45 seconds; 30s x 3 is too slow for remote development, while more
-// aggressive settings such as 10s x 2 risk false positives during network jitter.
+// or an expired NAT mapping, so active heartbeats are required. Probes run every
+// 15 seconds, and 60 seconds without a reply closes even a blocked transport.
 const (
-	KeepaliveInterval = 15 * time.Second
-	KeepaliveMaxFail  = 3
-	// keepaliveType 用 @openssh.com 后缀，服务端会以"不支持"回应——
-	// 收到任何回应都证明连接存活，这正是 OpenSSH 自身的 keepalive 做法。
-	// The @openssh.com suffix makes the server reply "unsupported"; any response proves
-	// the connection is alive, matching OpenSSH's own keepalive technique.
-	keepaliveType = "keepalive@openssh.com"
+	KeepaliveInterval = sshkeepalive.Interval
+	KeepaliveTimeout  = sshkeepalive.Timeout
 
 	DialTimeout = 15 * time.Second
 )
@@ -65,6 +59,8 @@ type Conn struct {
 	// done 在连接失效时关闭，供隧道 goroutine 感知并退出。
 	// done closes when the connection fails so tunnel goroutines can detect it and exit.
 	done chan struct{}
+	// keepaliveDone closes after the heartbeat request worker has exited.
+	keepaliveDone chan struct{}
 	// cause 记录连接失效的原因，供上层分类。
 	// cause records why the connection failed for classification by the caller.
 	cause error
@@ -119,8 +115,9 @@ func (d Dialer) Dial(ctx context.Context) (*Conn, error) {
 	}
 
 	c := &Conn{
-		client: ssh.NewClient(sshConn, chans, reqs),
-		done:   make(chan struct{}),
+		client:        ssh.NewClient(sshConn, chans, reqs),
+		done:          make(chan struct{}),
+		keepaliveDone: make(chan struct{}),
 	}
 
 	go c.keepalive(d.Log)
@@ -148,7 +145,9 @@ func (c *Conn) Cause() error {
 // Close 主动关闭连接。可重复调用。
 // Close actively closes the connection and is idempotent.
 func (c *Conn) Close() error {
-	return c.fail(nil)
+	err := c.fail(nil)
+	<-c.keepaliveDone
+	return err
 }
 
 func (c *Conn) fail(cause error) error {
@@ -175,38 +174,20 @@ func (c *Conn) watch() {
 	c.fail(err)
 }
 
-// keepalive 周期性发送心跳，连续失败达阈值即判定连接已断。
-// keepalive sends periodic probes and declares the connection dead at the failure threshold.
+// keepalive 周期性探活；超时独立于发送与等待回复，避免网络黑洞阻塞检测。
+// keepalive bounds probes independently of blocked writes or missing replies.
 func (c *Conn) keepalive(log *logbuf.Buffer) {
-	ticker := time.NewTicker(KeepaliveInterval)
-	defer ticker.Stop()
-
-	fails := 0
-	for {
-		select {
-		case <-c.done:
-			return
-		case <-ticker.C:
-			// wantReply=true：服务端必然回应（哪怕是"不支持"），
-			// 收到回应即证明连接存活。
-			// wantReply=true guarantees a server response, even "unsupported"; any reply
-			// proves the connection is alive.
-			_, _, err := c.client.SendRequest(keepaliveType, true, nil)
-			if err == nil {
-				fails = 0
-				continue
-			}
-
-			fails++
-			if log != nil {
-				log.Warnf("conn", "心跳无响应（%d/%d）", fails, KeepaliveMaxFail)
-			}
-			if fails >= KeepaliveMaxFail {
-				c.fail(fmt.Errorf("心跳连续 %d 次无响应，判定连接已断开", fails))
-				return
-			}
+	defer close(c.keepaliveDone)
+	sshkeepalive.Run(c.client, c.done, KeepaliveInterval, KeepaliveTimeout, func(err error) {
+		cause := fmt.Errorf("SSH 心跳失败: %w", err)
+		if errors.Is(err, sshkeepalive.ErrTimeout) {
+			cause = fmt.Errorf("心跳超过 %s 无响应，判定连接已断开: %w", KeepaliveTimeout, err)
 		}
-	}
+		if log != nil {
+			log.Warnf("conn", "%v", cause)
+		}
+		_ = c.fail(cause)
+	})
 }
 
 func loadKey(path string) (ssh.AuthMethod, error) {

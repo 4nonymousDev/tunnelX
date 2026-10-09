@@ -78,8 +78,9 @@ type Manager struct {
 	// It is nil while disconnected.
 	runCtx context.Context
 
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	cancel          context.CancelFunc
+	wg              sync.WaitGroup
+	duplicatePolicy duplicateIDPolicy
 }
 
 // New 创建管理器。隧道按配置建立但尚未启动。
@@ -87,10 +88,11 @@ type Manager struct {
 func New(cfg *config.Config, log *logbuf.Buffer, version string, onTunnelChange func()) *Manager {
 	config.EnsureUniqueTunnelIDs(cfg.Tunnels)
 	m := &Manager{
-		cfg:            cfg,
-		log:            log,
-		version:        version,
-		onTunnelChange: onTunnelChange,
+		cfg:             cfg,
+		log:             log,
+		version:         version,
+		onTunnelChange:  onTunnelChange,
+		duplicatePolicy: defaultDuplicateIDPolicy(),
 	}
 	for i := range cfg.Tunnels {
 		config.EnsureTunnelID(&cfg.Tunnels[i])
@@ -347,6 +349,7 @@ func (m *Manager) Stop() {
 // loop is the connection layer's retry loop.
 func (m *Manager) loop(ctx context.Context) {
 	backoff := tunnel.NewBackoff()
+	duplicates := duplicateIDRetry{policy: m.duplicatePolicy}
 
 	for {
 		if ctx.Err() != nil {
@@ -356,6 +359,7 @@ func (m *Manager) loop(ctx context.Context) {
 		err := m.connectAndServe(ctx)
 		if m.ConnStatus().State == ConnConnected {
 			backoff.Reset()
+			duplicates.reset()
 		}
 
 		if ctx.Err() != nil {
@@ -367,13 +371,19 @@ func (m *Manager) loop(ctx context.Context) {
 			continue // 无错误返回意味着连接正常结束，直接重连 / A nil error means a normal end; reconnect immediately.
 		}
 
+		wait := time.Duration(0)
+		if duplicateFault, duplicateWait, ok := duplicates.next(err, time.Now()); ok {
+			fault, wait = duplicateFault, duplicateWait
+		}
 		if !fault.Retryable {
 			m.log.Errorf("conn", "%s", fault.Reason)
 			m.setConnStatus(ConnStatus{State: ConnFailed, Reason: fault.Reason})
 			return
 		}
 
-		wait := backoff.NextFor(err)
+		if wait == 0 {
+			wait = backoff.NextFor(err)
+		}
 		m.log.Warnf("conn", "%s；%s 后重试", fault.Reason, wait.Round(time.Second))
 		m.setConnStatus(ConnStatus{
 			State:   ConnRetrying,
@@ -430,14 +440,18 @@ func (m *Manager) connectAndServe(ctx context.Context) error {
 		return err
 	}
 	defer conn.Close()
+	// Cancellation must also interrupt channel-open and hello, before the
+	// connection has reached the main serving select.
+	stopCancellation := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stopCancellation()
 
-	m.log.Infof("conn", "已连接 %s", addr)
+	m.log.Infof("conn", "SSH 认证成功 %s，正在登记设备…", addr)
 
 	// 在同一条连接上打开控制通道——不新建连接、不重复认证。
 	// Open the control channel on the same connection without reconnecting or reauthenticating.
 	ctrl, err := control.Dial(conn.Client(), m.cfg, m.role(), m.version, m.log)
 	if err != nil {
-		return err
+		return &helloFailure{err}
 	}
 	defer ctrl.Close()
 	ctrl.SetOnRegistry(m.onRegistry)
@@ -456,6 +470,7 @@ func (m *Manager) connectAndServe(ctx context.Context) error {
 		m.mu.Unlock()
 	}()
 
+	m.log.Infof("conn", "已连接 %s", addr)
 	m.setConnStatus(ConnStatus{State: ConnConnected})
 	// 服务端可能在 Dial 返回后、SetOnRegistry 安装回调前就推送初始注册表。
 	// 控制客户端虽会保存该快照，但桌面端收不到变更事件；因此在 m.ctrl

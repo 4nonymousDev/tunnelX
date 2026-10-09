@@ -18,6 +18,7 @@ import (
 	"tunnelx/internal/policy"
 	"tunnelx/internal/proto"
 	"tunnelx/internal/session"
+	"tunnelx/internal/sshkeepalive"
 	"tunnelx/internal/store"
 )
 
@@ -26,6 +27,7 @@ type Config struct {
 	AdminAddr, DataDir                          string
 	HelloTimeout                                time.Duration
 	HandshakeTimeout, WriteTimeout, OpenTimeout time.Duration
+	HeartbeatInterval, HeartbeatTimeout         time.Duration
 	Limits                                      Limits
 	IdentityBindings                            map[string]string // explicit bindings for embedded instances without a Store
 }
@@ -80,6 +82,12 @@ func New(cfg Config, logf func(string, ...any)) (*Server, error) {
 	}
 	if cfg.OpenTimeout <= 0 {
 		cfg.OpenTimeout = 10 * time.Second
+	}
+	if cfg.HeartbeatInterval <= 0 {
+		cfg.HeartbeatInterval = sshkeepalive.Interval
+	}
+	if cfg.HeartbeatTimeout <= 0 {
+		cfg.HeartbeatTimeout = sshkeepalive.Timeout
 	}
 	bindings := map[string]string{}
 	for id, fp := range cfg.IdentityBindings {
