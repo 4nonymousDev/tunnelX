@@ -167,20 +167,22 @@ func (s *Server) forward(visitor *ssh.ServerConn, newCh ssh.NewChannel, lease *s
 		return
 	}
 	go s.discardRequests(visitor, reqs, rate)
+	traffic, finishTraffic := s.traffic.begin(lease.Owner, lease.Visitor)
+	defer finishTraffic()
 	type copied struct {
 		n   int64
 		err error
 	}
 	copying := make(chan copied, 1)
 	go func() {
-		n, e := io.Copy(out.ch, in)
+		n, e := io.Copy(trafficWriter{out.ch, &traffic.bytes}, in)
 		if e != nil {
 			lease.Cancel()
 		}
 		s.closeWrite(owner, out.ch)
 		copying <- copied{n, e}
 	}()
-	received, err = io.Copy(in, out.ch)
+	received, err = io.Copy(trafficWriter{in, &traffic.bytes}, out.ch)
 	if err != nil {
 		lease.Cancel()
 	}

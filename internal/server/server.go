@@ -56,6 +56,9 @@ type Server struct {
 	auditJobs               chan func(context.Context)
 	auditStop               chan struct{}
 	auditDone               chan struct{}
+	traffic                 *trafficMeter
+	trafficStop             chan struct{}
+	trafficDone             chan struct{}
 }
 
 func New(cfg Config, logf func(string, ...any)) (*Server, error) {
@@ -146,6 +149,9 @@ func New(cfg Config, logf func(string, ...any)) (*Server, error) {
 		return &ssh.Permissions{Extensions: map[string]string{"pubkey-fp": fp}}, nil
 	}}
 	s.sshCfg.AddHostKey(hostKey)
+	s.traffic = newTrafficMeter(time.Now())
+	s.trafficStop, s.trafficDone = make(chan struct{}), make(chan struct{})
+	go s.runTraffic()
 	go s.runAuditJobs()
 	return s, nil
 }
@@ -253,6 +259,8 @@ func (s *Server) Close() error {
 		s.wg.Wait()
 		close(s.auditStop)
 		<-s.auditDone
+		close(s.trafficStop)
+		<-s.trafficDone
 		if s.store != nil {
 			s.closeErr = s.store.Close()
 		}

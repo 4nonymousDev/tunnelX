@@ -137,6 +137,17 @@ func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request, rid string) {
 	}
 	escaped := r.URL.EscapedPath()
 	switch {
+	case escaped == "/api/v1/traffic":
+		if !allow(w, r, rid, http.MethodGet) {
+			return
+		}
+		backend, ok := s.backend.(TrafficBackend)
+		if !ok {
+			writeError(w, http.StatusNotImplemented, "unsupported", "traffic monitoring is unavailable", rid)
+			return
+		}
+		v, e := backend.Traffic(r.Context())
+		s.respond(w, rid, v, e)
 	case escaped == "/api/v1/overview":
 		if !allow(w, r, rid, http.MethodGet) {
 			return
