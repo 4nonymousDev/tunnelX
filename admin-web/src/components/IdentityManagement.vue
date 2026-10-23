@@ -12,11 +12,11 @@
       <template v-if="existing && lookedUpId === form.client_id">
       <p>当前登记：<code>{{ existing.fingerprint }}</code> · {{ existing.revoked ? '已撤销' : '有效' }}</p>
       <label>变更方式<select v-model="keyMode" @change="verified = false"><option value="public_key">更换为新公钥</option><option value="fingerprint">使用已授权指纹 / 恢复原身份</option></select></label>
-      <label v-if="keyMode === 'public_key'">新公钥内容<textarea v-model.trim="publicKey" rows="4" maxlength="16384" required placeholder="粘贴新 .pub 文件的完整内容，例如 ssh-ed25519 AAAA…" @input="verified = false" /></label>
+      <label v-if="keyMode === 'public_key'">新公钥内容<textarea v-model.trim="publicKey" rows="4" maxlength="16384" required :spellcheck="false" placeholder="粘贴完整 SSH 公钥，例如 ssh-ed25519 AAAA…" @input="verified = false" /><small>输入一条完整公钥即可，末尾注释可选，无需上传文件。</small></label>
       <label v-else>已授权公钥的完整 SHA256 指纹<input v-model.trim="form.fingerprint" maxlength="50" required placeholder="SHA256:…" @input="verified = false" /></label>
       <p v-if="keyMode === 'public_key'">提交后将授权新公钥并替换此设备 ID 的绑定，无需先登记新设备。旧公钥将无法再使用此 ID 连接。</p>
       <label>变更原因<input v-model.trim="form.reason" maxlength="500" required /></label>
-      <label class="verify"><input v-model="verified" type="checkbox" required :disabled="lookupBusy" />我已核对设备配置和公钥文件，确认变更此 ID 对应的公钥或恢复已撤销的身份</label>
+      <label class="verify"><input v-model="verified" type="checkbox" required :disabled="lookupBusy" />我已核对设备配置和公钥，确认变更此 ID 对应的公钥或恢复已撤销的身份</label>
       <p class="warning">提交将更新第 {{ existing.generation }} 版登记并断开相关现有连接；已撤销的身份将恢复有效。</p>
       <button class="button primary" :disabled="api.loading.value || !verified || lookupBusy">确认{{ existing.revoked ? '恢复 / 变更身份' : '变更身份' }}</button>
       </template>

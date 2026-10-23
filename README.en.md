@@ -148,7 +148,7 @@ Imports must specify `peer_tunnel_id` and match the peer identity and tunnel ID.
 
 ### Public-key access
 
-Generate a dedicated key for a new device, then give its `.pub` file and the `id` from `config.json` to the administrator. Authorized devices run with their existing configuration; no account password is required.
+Generate a dedicated key for a new device, then give its public-key text and the `id` from `config.json` to the administrator. Paste the complete public key into the console; no `.pub` file upload is needed. Authorized devices run with their existing configuration; no account password is required.
 
 ### Generate a device key
 
@@ -161,7 +161,7 @@ The CLI generates a tunnel-specific key without depending on the system `ssh-key
   --output tunnel_key
 ```
 
-`--output` defaults to `tunnel_key` in the current directory. The command never overwrites an existing private key or `.pub` file. Username and email are optional; supplied metadata is plaintext in the public-key comment, and the hostname is not collected automatically. Register the public key and device ID together in the console.
+`--output` defaults to `tunnel_key` in the current directory. The command never overwrites an existing private key or `.pub` file. Username and email are optional; supplied metadata is plaintext in the public-key comment, and the hostname is not collected automatically. Paste the public-key text and register it with the device ID in the console; the comment is optional.
 
 ### Portable execution
 

@@ -1,7 +1,7 @@
 <template>
   <section class="page">
     <header class="page-header"><div><p class="eyebrow">设备资产</p><h1 class="page-title">设备管理</h1></div><div class="header-actions"><span class="count">{{ props.api.clients.value.length }} 个设备</span><button class="button primary" type="button" @click="openImport">登记设备</button></div></header>
-    <p class="muted">获取客户端公钥与设备 ID，点击“登记设备”一次完成公钥授权和身份绑定。</p>
+    <p class="muted">获取客户端公钥与设备 ID，点击“登记设备”直接粘贴公钥，一次完成公钥授权和身份绑定。</p>
     <div class="table-wrap">
       <table class="data-table">
         <thead><tr><th>客户端</th><th>管理员备注</th><th>授权</th><th>黑名单</th><th>在线会话</th><th>最后接入</th><th></th></tr></thead>

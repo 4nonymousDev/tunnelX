@@ -2,10 +2,9 @@
   <div class="backdrop" role="presentation" @click.self="emit('cancel')">
     <form class="dialog import-dialog" role="dialog" aria-modal="true" aria-labelledby="import-key-title" @submit.prevent="submit">
       <h2 id="import-key-title" class="dialog-title">登记设备公钥</h2>
-      <p class="description">提交客户端的公钥和设备 ID，完成新设备登记或旧设备补登记。</p>
+      <p class="description">直接输入客户端的公钥和设备 ID，完成新设备登记或旧设备补登记。</p>
       <label class="field"><span>设备 ID（Client ID）</span><input v-model.trim="form.client_id" maxlength="128" required placeholder="填写该设备原配置中的 ID" /><small>请使用设备交给运维的原 ID，无需修改客户端配置。</small></label>
-      <label class="field"><span>选择 .pub 文件</span><input type="file" accept=".pub,text/plain" @change="readFile" /></label>
-      <label class="field"><span>公钥内容</span><textarea v-model.trim="form.public_key" rows="4" required placeholder="ssh-ed25519 AAAA... tunnelx:{...}" @input="parseMetadata" /></label>
+      <label class="field"><span>公钥内容</span><textarea v-model.trim="form.public_key" rows="4" maxlength="16384" required :spellcheck="false" placeholder="粘贴完整 SSH 公钥，例如 ssh-ed25519 AAAA…" @input="parseMetadata" /><small>输入一条完整公钥即可，末尾注释可选，无需上传文件。</small></label>
       <div class="grid">
         <label class="field"><span>用户名（可选）</span><input v-model.trim="form.username" maxlength="128" /></label>
         <label class="field"><span>邮箱（可选）</span><input v-model.trim="form.email" maxlength="254" type="email" /></label>
@@ -29,14 +28,6 @@ const emit = defineEmits<{ cancel: []; submit: [payload: ImportPublicKeyRequestD
 const form = reactive<ImportPublicKeyRequestDto>({ client_id: '', public_key: '', username: '', email: '', computer_name: '', reason: '' })
 const parseError = shallowRef('')
 
-async function readFile(event: Event): Promise<void> {
-  const file = (event.target as HTMLInputElement).files?.[0]
-  if (!file) return
-  if (file.size > 16 * 1024) { parseError.value = '公钥文件不能超过 16 KiB'; return }
-  form.public_key = await file.text()
-  parseMetadata()
-}
-
 function parseMetadata(): void {
   parseError.value = ''
   const line = form.public_key.trim()
@@ -48,7 +39,7 @@ function parseMetadata(): void {
     form.username = typeof value.username === 'string' ? value.username : ''
     form.email = typeof value.email === 'string' ? value.email : ''
     form.computer_name = typeof value.computer_name === 'string' ? value.computer_name : ''
-  } catch { parseError.value = '无法解析 .pub 中的 TunnelX 元数据' }
+  } catch { parseError.value = '无法解析公钥注释中的 TunnelX 元数据' }
 }
 
 function submit(): void {
