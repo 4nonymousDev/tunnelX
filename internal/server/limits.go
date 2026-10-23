@@ -79,10 +79,20 @@ func newAdmission(l Limits) *admission {
 	return &admission{limits: l, sources: map[string]*sourceBudget{}, global: newBucket(20, 40)}
 }
 func (a *admission) accept(raw net.Conn) (finish, release func(), ok bool) {
+	finish, release, reason := a.acceptWithReason(raw)
+	return finish, release, reason == ""
+}
+func (a *admission) acceptWithReason(raw net.Conn) (finish, release func(), reason string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.active >= a.limits.MaxConnections || a.handshakes >= a.limits.MaxHandshakes || !a.global.allow() {
-		return nil, nil, false
+	if a.active >= a.limits.MaxConnections {
+		return nil, nil, "connection_limit"
+	}
+	if a.handshakes >= a.limits.MaxHandshakes {
+		return nil, nil, "handshake_limit"
+	}
+	if !a.global.allow() {
+		return nil, nil, "global_rate_limit"
 	}
 	now := time.Now()
 	if now.Sub(a.lastSweep) >= time.Minute {
@@ -97,14 +107,17 @@ func (a *admission) accept(raw net.Conn) (finish, release func(), ok bool) {
 	source := a.sources[ip]
 	if source == nil {
 		if len(a.sources) >= a.limits.MaxSources {
-			return nil, nil, false
+			return nil, nil, "source_tracking_limit"
 		}
 		source = &sourceBudget{bucket: newBucket(4, 8)}
 		a.sources[ip] = source
 	}
 	source.last = now
-	if source.active >= a.limits.MaxHandshakesPerIP || !source.bucket.allow() {
-		return nil, nil, false
+	if source.active >= a.limits.MaxHandshakesPerIP {
+		return nil, nil, "source_handshake_limit"
+	}
+	if !source.bucket.allow() {
+		return nil, nil, "source_rate_limit"
 	}
 	a.active++
 	a.handshakes++
@@ -114,5 +127,5 @@ func (a *admission) accept(raw net.Conn) (finish, release func(), ok bool) {
 		hsOnce.Do(func() { a.mu.Lock(); a.handshakes--; source.active--; source.last = time.Now(); a.mu.Unlock() })
 	}
 	release = func() { allOnce.Do(func() { finish(); a.mu.Lock(); a.active--; a.mu.Unlock() }) }
-	return finish, release, true
+	return finish, release, ""
 }

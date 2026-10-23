@@ -27,6 +27,8 @@ type Config struct {
 	AdminAddr, DataDir                          string
 	HelloTimeout                                time.Duration
 	HandshakeTimeout, WriteTimeout, OpenTimeout time.Duration
+	HandshakeFailureWindow                      time.Duration
+	HandshakeFailureThreshold                   int
 	HeartbeatInterval, HeartbeatTimeout         time.Duration
 	Limits                                      Limits
 	IdentityBindings                            map[string]string // explicit bindings for embedded instances without a Store
@@ -55,6 +57,7 @@ type Server struct {
 	wg                      sync.WaitGroup
 	admission               *admission
 	logAfter                atomic.Int64
+	handshakeLogs           *handshakeMonitor
 	auditJobs               chan func(context.Context)
 	auditStop               chan struct{}
 	auditDone               chan struct{}
@@ -78,6 +81,12 @@ func New(cfg Config, logf func(string, ...any)) (*Server, error) {
 	}
 	if cfg.HandshakeTimeout <= 0 {
 		cfg.HandshakeTimeout = 10 * time.Second
+	}
+	if cfg.HandshakeFailureWindow <= 0 {
+		cfg.HandshakeFailureWindow = time.Minute
+	}
+	if cfg.HandshakeFailureThreshold <= 0 {
+		cfg.HandshakeFailureThreshold = 10
 	}
 	if cfg.WriteTimeout <= 0 {
 		cfg.WriteTimeout = 10 * time.Second
@@ -105,6 +114,7 @@ func New(cfg Config, logf func(string, ...any)) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{cfg: cfg, logf: logf, auth: authorized, connections: map[net.Conn]struct{}{}, auditIDs: map[string]int64{}, helloTimers: map[string]*time.Timer{}, admission: newAdmission(cfg.Limits), auditJobs: make(chan func(context.Context), 256), auditStop: make(chan struct{}), auditDone: make(chan struct{})}
+	s.handshakeLogs = newHandshakeMonitor(cfg.Limits.MaxSources, cfg.HandshakeFailureWindow, cfg.HandshakeFailureThreshold)
 	if cfg.DataDir != "" {
 		if err = os.MkdirAll(cfg.DataDir, 0o700); err != nil {
 			return nil, fmt.Errorf("创建数据目录: %w", err)
@@ -147,14 +157,11 @@ func New(cfg Config, logf func(string, ...any)) (*Server, error) {
 	}
 	s.sshCfg = &ssh.ServerConfig{MaxAuthTries: 3, PublicKeyCallback: func(c ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 		fp := ssh.FingerprintSHA256(key)
-		remote := remoteHost(c.RemoteAddr())
 		if s.policy.Blocked(fp) {
-			s.recordRejected(fp, remote, "blocked")
-			return nil, fmt.Errorf("公钥已被禁用: %s", fp)
+			return nil, fmt.Errorf("%w: %s", errHandshakeBlockedKey, fp)
 		}
 		if !s.fingerprintAuthorized(fp) {
-			s.recordRejected(fp, remote, "rejected")
-			return nil, fmt.Errorf("公钥未被授权: %s", fp)
+			return nil, fmt.Errorf("%w: %s", errHandshakeUnauthorizedKey, fp)
 		}
 		return &ssh.Permissions{Extensions: map[string]string{"pubkey-fp": fp}}, nil
 	}}
@@ -235,10 +242,10 @@ func (s *Server) ListenAndServe() error {
 			s.logf("接受连接失败: %v", e)
 			continue
 		}
-		finish, release, ok := s.admission.accept(raw)
-		if !ok {
+		finish, release, reason := s.admission.acceptWithReason(raw)
+		if reason != "" {
 			_ = raw.Close()
-			s.recordRejected("", "", "capacity")
+			s.recordHandshake(handshakeAttempt{Remote: raw.RemoteAddr().String(), Result: "rejected", Reason: reason})
 			continue
 		}
 		s.mu.Lock()
@@ -299,9 +306,10 @@ func (s *Server) Close() error {
 }
 
 func (s *Server) handleConn(raw net.Conn) {
-	finish, release, ok := s.admission.accept(raw)
-	if !ok {
+	finish, release, reason := s.admission.acceptWithReason(raw)
+	if reason != "" {
 		_ = raw.Close()
+		s.recordHandshake(handshakeAttempt{Remote: raw.RemoteAddr().String(), Result: "rejected", Reason: reason})
 		return
 	}
 	s.handleAdmitted(raw, finish, release)
@@ -310,17 +318,31 @@ func (s *Server) handleConn(raw net.Conn) {
 func (s *Server) handleAdmitted(raw net.Conn, finish, release func()) {
 	defer release()
 	defer func() { s.mu.Lock(); delete(s.connections, raw); s.mu.Unlock(); _ = raw.Close() }()
-	if err := raw.SetDeadline(time.Now().Add(s.cfg.HandshakeTimeout)); err != nil {
+	started := time.Now()
+	attempt := handshakeAttempt{Remote: raw.RemoteAddr().String()}
+	if err := raw.SetDeadline(started.Add(s.cfg.HandshakeTimeout)); err != nil {
+		attempt.Result, attempt.Reason, attempt.Error = "rejected", "setup_failed", err.Error()
+		attempt.Duration = time.Since(started)
+		s.recordHandshake(attempt)
 		return
 	}
-	sshConn, chans, reqs, err := ssh.NewServerConn(raw, s.sshCfg)
+	sshConfig := s.observedSSHConfig(&attempt)
+	sshConn, chans, reqs, err := ssh.NewServerConn(raw, &sshConfig)
 	finish()
+	attempt.Duration = time.Since(started)
 	if err != nil {
-		s.recordRejected("", "", "handshake")
+		attempt.Result, attempt.Reason, attempt.Error = "failed", handshakeFailureReason(err, attempt.KeyStatus), err.Error()
+		if s.closing.Load() {
+			attempt.Result, attempt.Reason = "closed", "server_shutdown"
+		}
+		s.recordHandshake(attempt)
 		return
 	}
 	_ = raw.SetDeadline(time.Time{})
 	defer sshConn.Close()
+	attempt.Result, attempt.Reason = "success", "authenticated"
+	attempt.Fingerprint = sshConn.Permissions.Extensions["pubkey-fp"]
+	s.recordHandshake(attempt)
 	rate := newBucket(20, 40)
 	s.mu.Lock()
 	s.requestRates[sshConn] = rate

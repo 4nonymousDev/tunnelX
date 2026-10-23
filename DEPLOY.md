@@ -111,6 +111,41 @@ sudo journalctl -u tunnel-server -f
 sudo systemctl restart tunnel-server
 ```
 
+### 握手日志与可疑连接
+
+每次 TCP 连接在 SSH 握手结束或准入拒绝时记录结果。日志包含 `remote`（来源 IP 和端口）、
+`duration_ms`、`result`、`reason` 和具体 `error`；进入认证阶段后还可记录 `client_version`、
+`user`、`method`、`fingerprint`、`key_status` 和 `auth_error`。未取得的字段为空。
+客户端版本、用户名及未认证的公钥指纹均是对方提供的信息，不代表已验证身份。
+不记录密码、签名或原始报文；外部文本转义并截断到 512 字节，避免日志注入和过长记录。
+
+`reason` 区分 `timeout`、`peer_closed`、`network_error`、`protocol_error`、
+`authentication_failed`、`unauthorized_key`、`blocked_key`，以及服务器容量和来源速率限制。
+握手成功为 `result=success reason=authenticated`，仅表示 SSH 认证成功，设备登记等后续准入仍可能失败。
+每个失败或被拒绝的连接只计一次拒绝次数；正常的 SSH `none` 认证方法探测不单独计数。
+
+同一 IP（跨来源端口合并）在一个统计窗口内累计失败达到阈值时，输出
+`event=alert suspicious=true rule=frequent_failures`。默认窗口为 1 分钟，阈值为 10 次；
+窗口从该 IP 的首条记录开始，结束后在下一条记录到达时重新计数，`window_start` 标明窗口起点。
+握手失败、单来源并发超限和单来源速率超限计入判断；服务器全局容量不足、关闭和本地初始化失败不计入。
+这是可疑频率提示，网络故障或共享出口也可能触发；不会自动封禁 IP。
+可在 systemd 的 `ExecStart` 中追加 `-handshake-failure-window 1m -handshake-failure-threshold 10` 调整。
+
+低频连接记录详情；同一 IP 的常规详情最多每 5 秒一条，阈值告警可提前输出。
+全局每 5 秒最多输出 20 条详情及来源汇总。被限流的记录仍参与计数，
+`suppressed` 表示当前记录合并了多少条未单独输出的记录；`event=summary` 保存最后一条样本及计数，
+定时刷新，即使对方停止连接也会补写。来源跟踪默认最多 4096 个，满额时额外输出
+`event=overflow untracked_attempts=...`；这些溢出连接只保留总数，不作逐 IP 判断。
+正常关闭时补写仍在等待的来源汇总，不受上述输出速率限制。进程重启会清空内存中的可疑频率统计。
+详情保存在标准输出（systemd 部署时由 journal 收集），数据库继续保存拒绝总数，不新增匿名逐条审计记录。
+
+```bash
+# 导出最近一小时的握手诊断日志
+sudo journalctl -u tunnel-server --since "1 hour ago" --no-pager -o short-iso > tunnel-server-log.txt
+# 查看可疑来源告警和被跟踪来源的后续可疑记录
+sudo journalctl -u tunnel-server --since "1 hour ago" --no-pager | grep 'suspicious=true'
+```
+
 备份前建议短暂停止服务，复制整个 `/var/lib/tunnel-server`。数据库时间统一使用 UTC
 Unix 微秒整数；“今日拒绝”边界按服务器操作系统时区计算。
 

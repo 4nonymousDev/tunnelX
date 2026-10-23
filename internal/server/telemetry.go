@@ -5,14 +5,14 @@ import (
 	"time"
 )
 
-// Anonymous events never wait for disk. Both the store and ordinary logs have
-// fixed cardinality and rate; no peer-controlled text is used as a metric key.
+// Anonymous events retain aggregate database counts. Detailed handshake logs
+// use their own bounded source tracker, independently of operational errors.
 func (s *Server) recordRejected(fp, remote, result string) {
 	if s.store != nil {
 		s.store.RecordRejection(result)
 	}
 	if s.allowLog() {
-		s.logf("拒绝请求汇总: %s（已限制日志速率）", result)
+		s.logf("拒绝请求 result=%q remote=%q fingerprint=%q", result, logText(remote), logText(fp))
 	}
 }
 func (s *Server) allowLog() bool {
@@ -43,8 +43,13 @@ func (s *Server) queueAudit(job func(context.Context)) {
 }
 func (s *Server) runAuditJobs() {
 	defer close(s.auditDone)
+	tick := time.NewTicker(handshakeLogInterval)
+	defer tick.Stop()
+	defer func() { s.flushHandshakeLogs(time.Now(), true) }()
 	for {
 		select {
+		case now := <-tick.C:
+			s.flushHandshakeLogs(now, false)
 		case job := <-s.auditJobs:
 			ctx, cancel := s.dbContext()
 			job(ctx)

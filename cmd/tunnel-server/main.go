@@ -35,6 +35,8 @@ func main() {
 	flag.StringVar(&cfg.AdminAddr, "admin-addr", "127.0.0.1:2223", "管理端监听地址（仅允许明确的 loopback IP）")
 	flag.StringVar(&cfg.DataDir, "data-dir", "data", "SQLite 数据目录")
 	flag.DurationVar(&cfg.HandshakeTimeout, "handshake-timeout", 10*time.Second, "SSH 握手最长耗时")
+	flag.DurationVar(&cfg.HandshakeFailureWindow, "handshake-failure-window", time.Minute, "可疑握手判断的每来源统计窗口")
+	flag.IntVar(&cfg.HandshakeFailureThreshold, "handshake-failure-threshold", 10, "同一来源在统计窗口内达到此失败次数时标记可疑（不自动封禁）")
 	flag.DurationVar(&cfg.OpenTimeout, "open-timeout", 10*time.Second, "等待导出端接受转发的最长耗时")
 	flag.DurationVar(&cfg.WriteTimeout, "write-timeout", 10*time.Second, "控制消息写入最长耗时")
 	flag.IntVar(&cfg.Limits.MaxConnections, "max-connections", 64, "全部 TCP 连接上限")
